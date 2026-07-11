@@ -110,8 +110,28 @@ Job bodies live **off-chain** (API store). Only `contentHash = SHA-256(canonical
 - `main` — BSV mainnet
 - `test` — BSV testnet / staging
 
+## Poster bonds (Phase 4)
+
+Standing deposit keyed by `controllerKey` (and optional account #).
+
+- `POST /v1/bonds/deposit` — deposit / top-up + BRC-100 template  
+- `POST /v1/bonds/release` — release active bond  
+- `POST /v1/bonds/slash` — platform slash (`X-Admin-Secret`)  
+- When `REQUIRE_POSTER_BOND=true`, `POST /v1/bounties` requires active bond ≥ `POSTER_BOND_MIN_SATS`
+
+## Atomic account swap (Phase 4)
+
+`buildAtomicAccountSwapTemplate` produces one createAction with:
+
+1. Payment output → seller (`priceSats`)  
+2. 1-sat account token → buyer  
+3. OP_RETURN `ACCOUNT_TRANSFER`
+
+API: `POST /v1/accounts/:n/swap-template` and `/buy` with `includeSwapTemplate`.
+
 ## Agent discovery
 
 - OpenAPI: `GET /openapi.json`
-- Agent card: `GET /.well-known/agent.json`
+- Agent card: `GET /.well-known/agent.json` (includes MCP hint)
 - Health: `GET /health`
+- MCP stdio: `apps/mcp` (`AI_BOUNTIES_API_URL`)

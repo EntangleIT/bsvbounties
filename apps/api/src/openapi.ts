@@ -4,9 +4,9 @@ export function buildOpenApi(publicUrl: string) {
     openapi: '3.1.0',
     info: {
       title: 'AI Bounties API',
-      version: '0.3.0',
+      version: '0.4.0',
       description:
-        'Phase 3: BountyEscrow state machine + numbered accounts. BRC-100 wallets; sCrypt contract source in packages/contracts.',
+        'Phase 4: MCP tools, poster bonds, atomic account swaps, escrow, numbered accounts. BRC-100 wallets.',
     },
     servers: [{ url: publicUrl }],
     paths: {
@@ -222,6 +222,27 @@ export function buildOpenApi(publicUrl: string) {
           responses: { '200': { description: 'Ranking' } },
         },
       },
+      '/v1/bonds/deposit': {
+        post: {
+          operationId: 'depositPosterBond',
+          summary: 'Deposit or top up a poster bond',
+          responses: { '201': { description: 'Bond active' } },
+        },
+      },
+      '/v1/bonds/config': {
+        get: {
+          operationId: 'bondConfig',
+          summary: 'Poster bond requirements',
+          responses: { '200': { description: 'Config' } },
+        },
+      },
+      '/v1/accounts/{number}/swap-template': {
+        post: {
+          operationId: 'accountSwapTemplate',
+          summary: 'Atomic account sale createAction template',
+          responses: { '200': { description: 'Template' } },
+        },
+      },
     },
   }
 }
@@ -231,12 +252,18 @@ export function buildAgentCard(publicUrl: string) {
     name: 'AI Bounties',
     description:
       'BSV marketplace for AI/human bounties with tradable numbered accounts (Twetch-style #N). BRC-100 wallets; Phase 2 accounts + Phase 1 escrow.',
-    version: '0.3.0',
+    version: '0.4.0',
     protocol: 'aibounties',
     protocolVersion: 1,
     chain: 'bsv',
     wallet: 'BRC-100',
     documentation: `${publicUrl}/openapi.json`,
+    mcp: {
+      name: 'ai-bounties',
+      transport: 'stdio',
+      package: '@ai-bounties/mcp',
+      env: { AI_BOUNTIES_API_URL: publicUrl },
+    },
     endpoints: {
       openapi: `${publicUrl}/openapi.json`,
       health: `${publicUrl}/health`,
@@ -244,6 +271,7 @@ export function buildAgentCard(publicUrl: string) {
       escrow: `${publicUrl}/v1/bounties/{id}/escrow`,
       accounts: `${publicUrl}/v1/accounts`,
       marketplace: `${publicUrl}/v1/accounts/marketplace`,
+      bonds: `${publicUrl}/v1/bonds`,
       authChallenge: `${publicUrl}/v1/auth/challenge`,
       authLogin: `${publicUrl}/v1/auth/login`,
       draft: `${publicUrl}/v1/llm/draft-bounty`,
@@ -257,6 +285,8 @@ export function buildAgentCard(publicUrl: string) {
       unit: 'satoshis',
       escrow: 'phase3-bounty-escrow-state-machine',
       accounts: 'numbered-1sat-index',
+      bonds: 'poster-bond-deposit',
+      accountSale: 'atomic-swap-template',
     },
   }
 }

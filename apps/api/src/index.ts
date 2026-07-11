@@ -8,10 +8,12 @@ import { fileURLToPath } from 'node:url'
 import type { Network } from '@ai-bounties/shared'
 import { BountyStore } from './store/bountyStore.js'
 import { AccountStore } from './store/accountStore.js'
+import { BondStore } from './store/bondStore.js'
 import { ChallengeStore, SessionStore } from './store/sessionStore.js'
 import { bountyRoutes } from './routes/bounties.js'
 import { accountRoutes } from './routes/accounts.js'
 import { authRoutes } from './routes/auth.js'
+import { bondRoutes } from './routes/bonds.js'
 import { llmRoutes } from './routes/llm.js'
 import { buildAgentCard, buildOpenApi } from './openapi.js'
 
@@ -30,10 +32,12 @@ const bountyStore = new BountyStore(DATA_DIR)
 const accountStore = new AccountStore(DATA_DIR)
 const sessionStore = new SessionStore(DATA_DIR)
 const challengeStore = new ChallengeStore()
+const bondStore = new BondStore(DATA_DIR)
 
 await bountyStore.init()
 await accountStore.init()
 await sessionStore.init()
+await bondStore.init()
 
 const app = new Hono()
 
@@ -43,7 +47,7 @@ app.use(
   cors({
     origin: [WEB_ORIGIN, 'http://localhost:5173', 'http://127.0.0.1:5173'],
     allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization'],
+    allowHeaders: ['Content-Type', 'Authorization', 'X-Admin-Secret'],
   }),
 )
 
@@ -51,13 +55,16 @@ app.get('/health', (c) =>
   c.json({
     ok: true,
     service: 'ai-bounties-api',
-    version: '0.3.0',
-    phase: 3,
+    version: '0.4.0',
+    phase: 4,
     network: NETWORK,
     bounties: bountyStore.count(),
     open: bountyStore.count('open'),
     accounts: accountStore.count(),
     forSale: accountStore.listForSaleCount(),
+    activeBonds: bondStore.countActive(),
+    requirePosterBond: process.env.REQUIRE_POSTER_BOND === 'true',
+    mcp: `${PUBLIC_URL.replace(/\/$/, '')} → run apps/mcp (stdio)`,
   }),
 )
 
@@ -69,9 +76,9 @@ app.get('/.well-known/ai-plugin.json', (c) =>
     name_for_human: 'AI Bounties',
     name_for_model: 'ai_bounties',
     description_for_human:
-      'Find and post BSV-paid bounties. Tradable numbered accounts (#1, #33…).',
+      'BSV bounties, tradable accounts, escrow, poster bonds. MCP server available for agents.',
     description_for_model:
-      'Use this API to mint numbered accounts, log in, list/buy accounts, and post/claim BSV bounties. See /openapi.json.',
+      'Mint accounts, deposit poster bonds, post/claim BSV bounties with escrow, atomic account swaps. Prefer OpenAPI or MCP tools.',
     auth: { type: 'none' },
     api: {
       type: 'openapi',
@@ -84,10 +91,11 @@ app.get('/.well-known/ai-plugin.json', (c) =>
 
 app.route(
   '/v1/bounties',
-  bountyRoutes(bountyStore, NETWORK, accountStore, sessionStore),
+  bountyRoutes(bountyStore, NETWORK, accountStore, sessionStore, bondStore),
 )
 app.route('/v1/accounts', accountRoutes(accountStore, sessionStore, NETWORK))
 app.route('/v1/auth', authRoutes(accountStore, sessionStore, challengeStore))
+app.route('/v1/bonds', bondRoutes(bondStore, sessionStore, NETWORK))
 app.route('/v1/llm', llmRoutes(bountyStore))
 
 app.onError((err, c) => {
@@ -103,6 +111,6 @@ console.log(`  OpenAPI:  ${PUBLIC_URL}/openapi.json`)
 console.log(`  Agent:    ${PUBLIC_URL}/.well-known/agent.json`)
 console.log(`  Data:     ${DATA_DIR}`)
 console.log(`  Network:  ${NETWORK}`)
-console.log(`  Phase:    3 (escrow)`)
+console.log(`  Phase:    4 (MCP + bonds + atomic swaps)`)
 
 serve({ fetch: app.fetch, port: PORT, hostname: HOST })

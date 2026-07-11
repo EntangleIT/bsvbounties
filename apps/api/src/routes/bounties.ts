@@ -24,7 +24,9 @@ import {
 import type { BountyStore } from '../store/bountyStore.js'
 import type { AccountStore } from '../store/accountStore.js'
 import type { SessionStore } from '../store/sessionStore.js'
+import type { BondStore } from '../store/bondStore.js'
 import { getSessionFromRequest } from './auth.js'
+import { bondGate } from './bonds.js'
 
 const createSchema = z.object({
   title: z.string().min(3).max(120),
@@ -144,6 +146,7 @@ export function bountyRoutes(
   defaultNetwork: Network,
   accounts?: AccountStore,
   sessions?: SessionStore,
+  bonds?: BondStore,
 ) {
   const app = new Hono()
   const requireAccounts = process.env.REQUIRE_ACCOUNT_FOR_CLAIM === 'true'
@@ -219,6 +222,20 @@ export function bountyRoutes(
       }
       posterAccount = session.accountNumber
       posterPubKey = session.controllerKey
+    }
+
+    if (bonds) {
+      const gate = bondGate(bonds, posterPubKey)
+      if (!gate.ok) {
+        return c.json(
+          {
+            error: gate.error,
+            minBondSats: gate.minBondSats,
+            note: `Deposit a poster bond of at least ${gate.minBondSats} sats via POST /v1/bonds/deposit (REQUIRE_POSTER_BOND=true).`,
+          },
+          403,
+        )
+      }
     }
 
     const useEscrow = body.useEscrow !== false

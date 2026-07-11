@@ -7,6 +7,7 @@ import {
   type AccountKind,
   type Network,
 } from '@ai-bounties/shared'
+import { buildAtomicAccountSwapTemplate } from '@ai-bounties/contracts'
 import type { AccountStore } from '../store/accountStore.js'
 import type { SessionStore } from '../store/sessionStore.js'
 import type { Session } from '../store/sessionStore.js'
@@ -256,12 +257,54 @@ export function accountRoutes(
     })
   })
 
+  /**
+   * Preview atomic swap createAction (no ownership change yet).
+   */
+  app.post('/:number/swap-template', async (c) => {
+    const n = Number(c.req.param('number'))
+    const body = z
+      .object({
+        buyerControllerKey: z.string().min(4),
+        sellerPaymentLockingScriptHex: z.string().optional(),
+        buyerAccountLockingScriptHex: z.string().optional(),
+      })
+      .parse(await c.req.json())
+
+    const a = accounts.getByNumber(n)
+    if (!a) return c.json({ error: 'not_found' }, 404)
+    if (a.listPriceSats == null || a.listPriceSats <= 0) {
+      return c.json({ error: 'not_for_sale' }, 409)
+    }
+
+    const createActionTemplate = buildAtomicAccountSwapTemplate({
+      accountNumber: n,
+      priceSats: a.listPriceSats,
+      sellerControllerKey: a.controllerKey,
+      buyerControllerKey: body.buyerControllerKey,
+      sellerPaymentLockingScriptHex: body.sellerPaymentLockingScriptHex,
+      buyerAccountLockingScriptHex: body.buyerAccountLockingScriptHex,
+    })
+
+    return c.json({
+      account: a,
+      priceSats: a.listPriceSats,
+      createActionTemplate,
+      note: 'Broadcast with seller account 1-sat input + buyer payment. Then POST /buy with transferTxid.',
+    })
+  })
+
   app.post('/:number/buy', async (c) => {
     const n = Number(c.req.param('number'))
     const body = z
       .object({
         buyerControllerKey: z.string().min(4),
         transferTxid: z.string().optional(),
+        /** When true (default), include atomic swap createActionTemplate in response. */
+        includeSwapTemplate: z.boolean().optional().default(true),
+        sellerPaymentLockingScriptHex: z.string().optional(),
+        buyerAccountLockingScriptHex: z.string().optional(),
+        /** If false, only return template without transferring (use swap-template). */
+        commit: z.boolean().optional().default(true),
       })
       .parse(await c.req.json())
 
@@ -272,6 +315,26 @@ export function accountRoutes(
     }
 
     const price = a.listPriceSats
+    const createActionTemplate = body.includeSwapTemplate
+      ? buildAtomicAccountSwapTemplate({
+          accountNumber: n,
+          priceSats: price,
+          sellerControllerKey: a.controllerKey,
+          buyerControllerKey: body.buyerControllerKey,
+          sellerPaymentLockingScriptHex: body.sellerPaymentLockingScriptHex,
+          buyerAccountLockingScriptHex: body.buyerAccountLockingScriptHex,
+        })
+      : null
+
+    if (!body.commit) {
+      return c.json({
+        account: a,
+        paidSats: price,
+        createActionTemplate,
+        note: 'commit=false: template only. Set commit=true after broadcast to transfer ownership.',
+      })
+    }
+
     await sessions.revokeAccount(n)
     const updated = await accounts.transfer(n, body.buyerControllerKey, {
       transferTxid: body.transferTxid,
@@ -288,8 +351,13 @@ export function accountRoutes(
         accountNumber: n,
       },
       paidSats: price,
-      labels: [BRC100_LABELS.app, BRC100_LABELS.accountTransfer],
-      note: 'Phase 2: payment is application-assisted. Attach transferTxid when wallet swap exists.',
+      createActionTemplate,
+      labels: [
+        BRC100_LABELS.app,
+        BRC100_LABELS.accountTransfer,
+        'account:atomic-swap',
+      ],
+      note: 'Phase 4: atomic swap template included. Prefer broadcast template first, then buy with transferTxid. Demo may commit index immediately.',
     })
   })
 

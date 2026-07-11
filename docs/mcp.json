@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ai-bounties": {
+      "command": "node",
+      "args": ["apps/mcp/dist/index.js"],
+      "cwd": "/absolute/path/to/ai-bounties",
+      "env": {
+        "AI_BOUNTIES_API_URL": "http://localhost:8787"
+      }
+    }
+  }
+}
