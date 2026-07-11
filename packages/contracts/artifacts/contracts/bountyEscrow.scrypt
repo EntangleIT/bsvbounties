@@ -1,0 +1,128 @@
+struct __scrypt_ts_Change {  int amount;  Ripemd160 address;}
+
+contract BountyEscrow {
+  const PubKey poster;
+  @state PubKey worker;
+  const PubKey arbiter;
+  const int amount;
+  const int deadline;
+  @state bytes workHash;
+  @state int escrowState;
+  const bytes bountyId;
+  const bytes contentHash;
+  const int feeBps;
+  const bytes feePkh;
+  bytes __scrypt_ts_ctx_hashoutputs;
+  int __scrypt_ts_ctx_locktime;
+  __scrypt_ts_Change __scrypt_ts_change;
+  constructor(PubKey poster, PubKey worker, PubKey arbiter, int amount, int deadline, bytes workHash, int escrowState, bytes bountyId, bytes contentHash, int feeBps, bytes feePkh) {
+    this.poster = poster;
+    this.worker = worker;
+    this.arbiter = arbiter;
+    this.amount = amount;
+    this.deadline = deadline;
+    this.workHash = workHash;
+    this.escrowState = escrowState;
+    this.bountyId = bountyId;
+    this.contentHash = contentHash;
+    this.feeBps = feeBps;
+    this.feePkh = feePkh;
+  }
+  public function claim(Sig sig, PubKey workerPk, SigHashPreimage __scrypt_ts_txPreimage) {
+    require(Tx.checkPreimageSigHashType(__scrypt_ts_txPreimage, SigHashType(b'c3')));
+    this.__scrypt_ts_ctx_hashoutputs = SigHash.hashOutputs(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_ctx_locktime = SigHash.nLocktime(__scrypt_ts_txPreimage);
+    require(this.escrowState == 0);
+    require(checkSig(sig, workerPk));
+    require(hash256(workerPk) != hash256(this.poster));
+    this.worker = workerPk;
+    this.escrowState = 1;
+    bytes output = this.buildStateOutput(this.amount);
+    require(this.__scrypt_ts_ctx_hashoutputs == hash256(output));
+  }
+  public function submit(Sig sig, bytes wh, SigHashPreimage __scrypt_ts_txPreimage) {
+    require(Tx.checkPreimageSigHashType(__scrypt_ts_txPreimage, SigHashType(b'c3')));
+    this.__scrypt_ts_ctx_hashoutputs = SigHash.hashOutputs(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_ctx_locktime = SigHash.nLocktime(__scrypt_ts_txPreimage);
+    require(this.escrowState == 1 || this.escrowState == 2);
+    require(checkSig(sig, this.worker));
+    require(len(wh) == 32);
+    this.workHash = wh;
+    this.escrowState = 2;
+    bytes output = this.buildStateOutput(this.amount);
+    require(this.__scrypt_ts_ctx_hashoutputs == hash256(output));
+  }
+  public function approve(Sig sig, SigHashPreimage __scrypt_ts_txPreimage, int __scrypt_ts_changeAmount, Ripemd160 __scrypt_ts_changeAddress) {
+    require(Tx.checkPreimageSigHashType(__scrypt_ts_txPreimage, SigHashType(b'41')));
+    this.__scrypt_ts_ctx_hashoutputs = SigHash.hashOutputs(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_ctx_locktime = SigHash.nLocktime(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_change = {__scrypt_ts_changeAmount, __scrypt_ts_changeAddress};
+    require(this.escrowState == 1 || this.escrowState == 2);
+    require(checkSig(sig, this.poster));
+    int fee = (this.amount * this.feeBps) / 10000;
+    int toWorker = this.amount - fee;
+    bytes workerOut = Utils.buildOutput(Utils.buildPublicKeyHashScript(hash160(this.worker)), toWorker);
+    bytes outputs = this.appendFeeAndChange(workerOut, fee);
+    require(this.__scrypt_ts_ctx_hashoutputs == hash256(outputs));
+  }
+  public function cancel(Sig sig, SigHashPreimage __scrypt_ts_txPreimage, int __scrypt_ts_changeAmount, Ripemd160 __scrypt_ts_changeAddress) {
+    require(Tx.checkPreimageSigHashType(__scrypt_ts_txPreimage, SigHashType(b'41')));
+    this.__scrypt_ts_ctx_hashoutputs = SigHash.hashOutputs(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_ctx_locktime = SigHash.nLocktime(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_change = {__scrypt_ts_changeAmount, __scrypt_ts_changeAddress};
+    require(this.escrowState == 0);
+    require(checkSig(sig, this.poster));
+    bytes posterOut = Utils.buildOutput(Utils.buildPublicKeyHashScript(hash160(this.poster)), this.amount);
+    bytes outputs = posterOut + this.buildChangeOutput();
+    require(this.__scrypt_ts_ctx_hashoutputs == hash256(outputs));
+  }
+  public function refund(Sig sig, SigHashPreimage __scrypt_ts_txPreimage, int __scrypt_ts_changeAmount, Ripemd160 __scrypt_ts_changeAddress) {
+    require(Tx.checkPreimageSigHashType(__scrypt_ts_txPreimage, SigHashType(b'41')));
+    this.__scrypt_ts_ctx_hashoutputs = SigHash.hashOutputs(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_ctx_locktime = SigHash.nLocktime(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_change = {__scrypt_ts_changeAmount, __scrypt_ts_changeAddress};
+    require(this.escrowState == 1 || this.escrowState == 2);
+    require(checkSig(sig, this.poster));
+    require(this.deadline > 0);
+    require(this.__scrypt_ts_ctx_locktime >= this.deadline);
+    bytes posterOut = Utils.buildOutput(Utils.buildPublicKeyHashScript(hash160(this.poster)), this.amount);
+    bytes outputs = posterOut + this.buildChangeOutput();
+    require(this.__scrypt_ts_ctx_hashoutputs == hash256(outputs));
+  }
+  public function resolvePayWorker(Sig sig, SigHashPreimage __scrypt_ts_txPreimage, int __scrypt_ts_changeAmount, Ripemd160 __scrypt_ts_changeAddress) {
+    require(Tx.checkPreimageSigHashType(__scrypt_ts_txPreimage, SigHashType(b'41')));
+    this.__scrypt_ts_ctx_hashoutputs = SigHash.hashOutputs(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_ctx_locktime = SigHash.nLocktime(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_change = {__scrypt_ts_changeAmount, __scrypt_ts_changeAddress};
+    require(this.escrowState == 1 || this.escrowState == 2);
+    require(len(this.arbiter) == 33);
+    require(checkSig(sig, this.arbiter));
+    int fee = (this.amount * this.feeBps) / 10000;
+    int toWorker = this.amount - fee;
+    bytes workerOut = Utils.buildOutput(Utils.buildPublicKeyHashScript(hash160(this.worker)), toWorker);
+    bytes outputs = this.appendFeeAndChange(workerOut, fee);
+    require(this.__scrypt_ts_ctx_hashoutputs == hash256(outputs));
+  }
+  public function resolveRefundPoster(Sig sig, SigHashPreimage __scrypt_ts_txPreimage, int __scrypt_ts_changeAmount, Ripemd160 __scrypt_ts_changeAddress) {
+    require(Tx.checkPreimageSigHashType(__scrypt_ts_txPreimage, SigHashType(b'41')));
+    this.__scrypt_ts_ctx_hashoutputs = SigHash.hashOutputs(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_ctx_locktime = SigHash.nLocktime(__scrypt_ts_txPreimage);
+    this.__scrypt_ts_change = {__scrypt_ts_changeAmount, __scrypt_ts_changeAddress};
+    require(this.escrowState == 1 || this.escrowState == 2);
+    require(len(this.arbiter) == 33);
+    require(checkSig(sig, this.arbiter));
+    bytes posterOut = Utils.buildOutput(Utils.buildPublicKeyHashScript(hash160(this.poster)), this.amount);
+    bytes outputs = posterOut + this.buildChangeOutput();
+    require(this.__scrypt_ts_ctx_hashoutputs == hash256(outputs));
+  }
+  private function appendFeeAndChange(bytes base, int fee) : bytes {
+    bytes outs = base;
+    if(fee > 0 && len(this.feePkh) == 20) {
+        outs += Utils.buildOutput(Utils.buildPublicKeyHashScript(Ripemd160(this.feePkh)), fee);
+      }
+    outs += this.buildChangeOutput();
+    return outs;
+  }
+  function buildStateOutput(int amount) : bytes {  return Utils.buildOutput(this.getStateScript(), amount);}
+  function buildChangeOutput() : bytes {  return this.__scrypt_ts_change.amount > 0 ? Utils.buildOutput(Utils.buildPublicKeyHashScript(this.__scrypt_ts_change.address), this.__scrypt_ts_change.amount) : b'';}
+}

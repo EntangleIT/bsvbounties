@@ -159,5 +159,7 @@ export class BountyEscrow extends SmartContract {
 }
 */
 
-export const BOUNTY_ESCROW_SCRYPT_SOURCE = 'BountyEscrow.scrypt.ts'
-export const BOUNTY_ESCROW_VERSION = 1
+/** Path to real scrypt-ts contract source (compile with npm run compile). */
+export const BOUNTY_ESCROW_SCRYPT_SOURCE = 'src/contracts/bountyEscrow.ts'
+export const BOUNTY_ESCROW_VERSION = 2
+export const BOUNTY_ESCROW_ARTIFACT = 'artifacts/bountyEscrow.json'

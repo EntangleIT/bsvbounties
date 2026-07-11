@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "dist/contracts-cjs",
+    "rootDir": "src/contracts",
+    "declaration": false,
+    "strict": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/contracts/**/*.ts"]
+}

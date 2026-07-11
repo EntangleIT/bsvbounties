@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "errors": [],
+  "scryptfile": "contracts/bountyEscrow.scrypt",
+  "sourceMapFile": "contracts/bountyEscrow.scrypt.map",
+  "ctxMethods": [
+    "claim",
+    "submit",
+    "approve",
+    "cancel",
+    "refund",
+    "resolvePayWorker",
+    "resolveRefundPoster"
+  ]
+}

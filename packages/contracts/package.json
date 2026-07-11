@@ -1,6 +1,6 @@
 {
   "name": "@ai-bounties/contracts",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -9,19 +9,28 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./artifacts/*": "./artifacts/*"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.contracts-runtime.json && node -e \"require('fs').writeFileSync('dist/contracts-cjs/package.json', JSON.stringify({type:'commonjs'}))\"",
+    "compile": "node scripts/compile-scrypt.mjs",
+    "compile:and:build": "npm run compile && npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test dist/**/*.test.js",
+    "testnet:fund-info": "tsx src/testnet/fundInfo.ts",
+    "testnet:deploy-demo": "tsx src/testnet/deployDemo.ts",
     "dev": "tsc -p tsconfig.json --watch"
   },
   "dependencies": {
     "@ai-bounties/shared": "*",
-    "@bsv/sdk": "^1.4.21"
+    "@bsv/sdk": "^1.4.21",
+    "scrypt-ts": "^1.4.5"
   },
   "devDependencies": {
-    "typescript": "^5.8.2"
+    "@types/node": "^22.13.10",
+    "scrypt-cli": "^0.2.3",
+    "tsx": "^4.19.3",
+    "typescript": "^5.4.5"
   }
 }

@@ -6,6 +6,11 @@ import { logger } from 'hono/logger'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Network } from '@ai-bounties/shared'
+import {
+  escrowMode,
+  isScryptArtifactAvailable,
+  networkName,
+} from '@ai-bounties/contracts'
 import { BountyStore } from './store/bountyStore.js'
 import { AccountStore } from './store/accountStore.js'
 import { BondStore } from './store/bondStore.js'
@@ -27,7 +32,7 @@ const PORT = Number(process.env.AI_BOUNTIES_PORT ?? 8787)
 const HOST = process.env.HOST ?? '0.0.0.0'
 const PUBLIC_URL = process.env.PUBLIC_URL ?? `http://localhost:${PORT}`
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:5173'
-const NETWORK = (process.env.NETWORK ?? 'main') as Network
+const NETWORK = (process.env.NETWORK ?? process.env.BSV_NETWORK ?? 'test') as Network
 const DATA_DIR = path.resolve(rootDir, process.env.DATA_DIR ?? './data')
 
 const bountyStore = new BountyStore(DATA_DIR)
@@ -57,9 +62,12 @@ app.get('/health', (c) =>
   c.json({
     ok: true,
     service: 'ai-bounties-api',
-    version: '0.4.0',
-    phase: 4,
+    version: '0.5.0',
+    phase: 5,
     network: NETWORK,
+    bsvNetwork: networkName(),
+    escrowMode: escrowMode(),
+    scryptArtifact: isScryptArtifactAvailable(),
     bounties: bountyStore.count(),
     open: bountyStore.count('open'),
     accounts: accountStore.count(),
@@ -69,6 +77,26 @@ app.get('/health', (c) =>
     mcp: `${PUBLIC_URL.replace(/\/$/, '')} → run apps/mcp (stdio)`,
   }),
 )
+
+app.get('/v1/chain', async (c) => {
+  const { fundInfo } = await import('@ai-bounties/contracts')
+  const info = await fundInfo()
+  return c.json({
+    network: networkName(),
+    escrowMode: escrowMode(),
+    scryptArtifact: isScryptArtifactAvailable(),
+    wallet: info,
+    faucets: [
+      'https://scrypt.io/faucet',
+      'https://witnessonchain.com/faucet/tbsv',
+      'https://testnet.help/en/bsvfaucet/testnet',
+    ],
+    explorer:
+      networkName() === 'test'
+        ? 'https://test.whatsonchain.com'
+        : 'https://whatsonchain.com',
+  })
+})
 
 app.get('/openapi.json', (c) => c.json(buildOpenApi(PUBLIC_URL)))
 app.get('/.well-known/agent.json', (c) => c.json(buildAgentCard(PUBLIC_URL)))
@@ -113,6 +141,7 @@ console.log(`  OpenAPI:  ${PUBLIC_URL}/openapi.json`)
 console.log(`  Agent:    ${PUBLIC_URL}/.well-known/agent.json`)
 console.log(`  Data:     ${DATA_DIR}`)
 console.log(`  Network:  ${NETWORK}`)
-console.log(`  Phase:    4 (MCP + bonds + atomic swaps)`)
+console.log(`  Phase:    5 (sCrypt + testnet)`)
+console.log(`  Escrow:   ${escrowMode()} (artifact=${isScryptArtifactAvailable()})`)
 
 serve({ fetch: app.fetch, port: PORT, hostname: HOST })

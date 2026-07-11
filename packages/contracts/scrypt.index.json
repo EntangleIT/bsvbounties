@@ -1,0 +1,1 @@
+{"scryptBase":"artifacts","bindings":[{"symbol":"BountyEscrow","path":"contracts/bountyEscrow.scrypt"},{"symbol":"HelloWorld","path":"contracts/hello.scrypt"}]}

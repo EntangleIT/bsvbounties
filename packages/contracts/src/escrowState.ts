@@ -26,11 +26,11 @@ export interface EscrowSnapshot {
   amountSats: number
   bountyId: string
   contentHash: string
-  /** Compressed or uncompressed pubkey hex (poster). */
+  /** Compressed pubkey hex (poster) — required for scrypt deploy. */
   posterPubKey: string
-  /** Empty string until claimed. */
+  /** Empty string until claimed (or 33 zero-bytes for scrypt). */
   workerPubKey: string
-  /** Optional arbiter; empty = no dispute path. */
+  /** Optional arbiter compressed pubkey; empty = no dispute path. */
   arbiterPubKey: string
   /** Unix time or block height; 0 = no deadline. */
   deadline: number

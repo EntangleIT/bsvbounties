@@ -11,6 +11,7 @@
     "prebuild": "node -e \"\"",
     "build": "npm run build -w @ai-bounties/shared && npm run build -w @ai-bounties/llm && npm run build -w @ai-bounties/contracts && npm run build -w @ai-bounties/api && npm run build -w @ai-bounties/web && npm run build -w @ai-bounties/mcp",
     "build:libs": "npm run build -w @ai-bounties/shared && npm run build -w @ai-bounties/llm && npm run build -w @ai-bounties/contracts",
+    "compile:contracts": "npm run compile -w @ai-bounties/contracts",
     "dev": "npm run build:libs && concurrently -n api,web -c blue,magenta \"npm run dev -w @ai-bounties/api\" \"npm run dev -w @ai-bounties/web\"",
     "dev:api": "npm run build:libs && npm run dev -w @ai-bounties/api",
     "dev:web": "npm run dev -w @ai-bounties/web",

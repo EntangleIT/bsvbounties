@@ -14,9 +14,14 @@ import {
   applyTransition,
   bountyStatusFromEscrow,
   buildDeployEscrowTemplate,
+  buildScryptDeployTemplate,
   buildTransitionTemplate,
+  canUseScryptEscrow,
+  escrowMode,
   escrowStateFromBountyStatus,
+  getArtifactMeta,
   initialSnapshot,
+  isScryptArtifactAvailable,
   type EscrowSnapshot,
   type EscrowMethod,
   EscrowState,
@@ -175,15 +180,24 @@ export function bountyRoutes(
     const b = store.get(c.req.param('id'))
     if (!b) return c.json({ error: 'not_found' }, 404)
     const snap = snapshotFromBounty(b)
+    let artifact: unknown = null
+    try {
+      artifact = getArtifactMeta()
+    } catch {
+      /* no artifact */
+    }
     return c.json({
       bountyId: b.id,
       status: b.status,
       escrow: b.escrow ?? null,
       snapshot: snap,
       contract: {
-        version: 1,
-        source: 'packages/contracts/src/BountyEscrow.scrypt.ts',
-        note: 'State machine enforced in app; sCrypt artifact optional for mainnet covenant.',
+        version: 2,
+        source: 'packages/contracts/src/contracts/bountyEscrow.ts',
+        escrowMode: escrowMode(),
+        artifactAvailable: isScryptArtifactAvailable(),
+        artifact,
+        note: 'Compiled BountyEscrow artifact used when ESCROW_MODE=scrypt and posterPubKey is a real compressed key.',
       },
     })
   })
@@ -254,15 +268,46 @@ export function bountyRoutes(
         feeBps: body.feeBps ?? defaultFeeBps(),
         feePkh: body.feePkh ?? defaultFeePkh(),
       })
-      escrow = metaFromSnapshot(snap, 'scrypt')
-      createActionTemplate = buildDeployEscrowTemplate({
-        snapshot: snap,
-        title: body.title,
-        category: body.category,
-        posterLockingScriptHex: body.posterLockingScriptHex,
-      })
-      note =
-        'Phase 3 escrow deploy template ready. createAction, then PATCH /escrow with txid.'
+      const wantScrypt = escrowMode() === 'scrypt' && canUseScryptEscrow()
+      // Only use covenant locking script when posterPubKey is a real compressed key
+      const realPubkey =
+        /^0[23][0-9a-fA-F]{64}$/.test(posterPubKey.replace(/^0x/, '')) ||
+        /^[0-9a-fA-F]{66}$/.test(posterPubKey.replace(/^0x/, ''))
+
+      if (wantScrypt && realPubkey) {
+        try {
+          escrow = metaFromSnapshot(snap, 'scrypt')
+          createActionTemplate = buildScryptDeployTemplate({
+            snapshot: snap,
+            title: body.title,
+            category: body.category,
+          })
+          note =
+            'sCrypt BountyEscrow deploy template (compiled artifact). Broadcast with funded BRC-100 wallet on NETWORK=test|main, then PATCH /escrow.'
+        } catch (e) {
+          console.warn('scrypt deploy template failed, falling back', e)
+          escrow = metaFromSnapshot(snap, 'p2pkh')
+          createActionTemplate = buildDeployEscrowTemplate({
+            snapshot: snap,
+            title: body.title,
+            category: body.category,
+            posterLockingScriptHex: body.posterLockingScriptHex,
+          })
+          note =
+            'Fallback P2PKH escrow template (scrypt build failed or invalid key).'
+        }
+      } else {
+        escrow = metaFromSnapshot(snap, wantScrypt ? 'scrypt' : 'p2pkh')
+        createActionTemplate = buildDeployEscrowTemplate({
+          snapshot: snap,
+          title: body.title,
+          category: body.category,
+          posterLockingScriptHex: body.posterLockingScriptHex,
+        })
+        note = wantScrypt
+          ? 'ESCROW_MODE=scrypt but posterPubKey is not a compressed EC key — using P2PKH hold + state machine. Pass a real pubkey (33-byte hex) for covenant lock.'
+          : 'App-enforced escrow deploy template. Set ESCROW_MODE=scrypt + real posterPubKey for covenant locking script.'
+      }
     } else if (body.posterLockingScriptHex) {
       createActionTemplate = {
         description: `Post AI Bounty: ${body.title}`,

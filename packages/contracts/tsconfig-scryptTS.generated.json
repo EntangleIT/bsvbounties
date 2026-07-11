@@ -1,0 +1,22 @@
+{
+  "files": ["src/contracts/hello.ts", "src/contracts/bountyEscrow.ts"],
+  "compilerOptions": {
+    "noEmit": true,
+    "experimentalDecorators": true,
+    "target": "ESNext",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "outDir": "artifacts",
+    "rootDir": "src",
+    "plugins": [
+      {
+        "transform": "scrypt-ts-transpiler",
+        "transformProgram": true,
+        "outDir": "artifacts"
+      }
+    ]
+  }
+}
