@@ -23,12 +23,20 @@ BSV marketplace where humans and AI agents post paid tasks (bounties), discovera
 cd ai-bounties
 cp .env.example .env
 npm install
-npm run build -w @ai-bounties/shared
-npm run build -w @ai-bounties/llm
 npm run dev
 ```
 
-If your shell already exports `PORT`, set `AI_BOUNTIES_PORT=8787` in `.env` so the API stays on the documented port.
+`npm run dev` builds shared libraries first, then starts API (:8787) + web (:5173).
+
+**If the API crashes with `@esbuild/darwin-arm64` missing:**
+
+```bash
+npm install @esbuild/darwin-arm64
+# or full reinstall:
+rm -rf node_modules && npm install
+```
+
+API port is **only** `AI_BOUNTIES_PORT` (default `8787`). A generic shell `PORT=…` is ignored so it does not desync from Vite’s proxy.
 
 - **Web:** http://localhost:5173  
 - **API:** http://localhost:8787  

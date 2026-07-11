@@ -21,7 +21,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '../../..')
 loadEnv({ path: path.join(rootDir, '.env') })
 
-const PORT = Number(process.env.AI_BOUNTIES_PORT ?? process.env.PORT ?? 8787)
+// Use AI_BOUNTIES_PORT only — ignore generic shell PORT (often set to 4000 etc.)
+// so Vite's proxy to :8787 stays aligned.
+const PORT = Number(process.env.AI_BOUNTIES_PORT ?? 8787)
 const HOST = process.env.HOST ?? '0.0.0.0'
 const PUBLIC_URL = process.env.PUBLIC_URL ?? `http://localhost:${PORT}`
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:5173'

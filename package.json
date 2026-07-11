@@ -8,17 +8,26 @@
     "apps/*"
   ],
   "scripts": {
+    "prebuild": "node -e \"\"",
     "build": "npm run build -w @ai-bounties/shared && npm run build -w @ai-bounties/llm && npm run build -w @ai-bounties/contracts && npm run build -w @ai-bounties/api && npm run build -w @ai-bounties/web && npm run build -w @ai-bounties/mcp",
-    "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w @ai-bounties/api\" \"npm run dev -w @ai-bounties/web\"",
-    "dev:api": "npm run dev -w @ai-bounties/api",
+    "build:libs": "npm run build -w @ai-bounties/shared && npm run build -w @ai-bounties/llm && npm run build -w @ai-bounties/contracts",
+    "dev": "npm run build:libs && concurrently -n api,web -c blue,magenta \"npm run dev -w @ai-bounties/api\" \"npm run dev -w @ai-bounties/web\"",
+    "dev:api": "npm run build:libs && npm run dev -w @ai-bounties/api",
     "dev:web": "npm run dev -w @ai-bounties/web",
     "dev:mcp": "npm run dev -w @ai-bounties/mcp",
+    "postinstall": "node scripts/ensure-esbuild.js",
     "typecheck": "npm run typecheck -w @ai-bounties/shared && npm run typecheck -w @ai-bounties/llm && npm run typecheck -w @ai-bounties/contracts && npm run typecheck -w @ai-bounties/api && npm run typecheck -w @ai-bounties/web && npm run typecheck -w @ai-bounties/mcp",
     "test": "npm run test -w @ai-bounties/shared --if-present && npm run test -w @ai-bounties/contracts --if-present"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
     "typescript": "^5.8.2"
+  },
+  "optionalDependencies": {
+    "@esbuild/darwin-arm64": "^0.25.0",
+    "@esbuild/darwin-x64": "^0.25.0",
+    "@esbuild/linux-arm64": "^0.25.0",
+    "@esbuild/linux-x64": "^0.25.0"
   },
   "engines": {
     "node": ">=20"
