@@ -10,6 +10,9 @@ import {
   type Network,
 } from '@ai-bounties/shared'
 import type { BountyStore } from '../store/bountyStore.js'
+import type { AccountStore } from '../store/accountStore.js'
+import type { SessionStore } from '../store/sessionStore.js'
+import { getSessionFromRequest } from './auth.js'
 
 const createSchema = z.object({
   title: z.string().min(3).max(120),
@@ -18,6 +21,7 @@ const createSchema = z.object({
   requirements: z.array(z.string()).optional(),
   amountSats: z.number().int().positive(),
   posterPubKey: z.string().optional(),
+  posterAccount: z.number().int().positive().optional(),
   /** Hex locking script for poster P2PKH (escrow hold). If omitted, only indexes off-chain. */
   posterLockingScriptHex: z.string().optional(),
   escrowTxid: z.string().optional(),
@@ -25,7 +29,8 @@ const createSchema = z.object({
 })
 
 const claimSchema = z.object({
-  workerPubKey: z.string().min(8),
+  workerPubKey: z.string().min(4).optional(),
+  workerAccount: z.number().int().positive().optional(),
   claimTxid: z.string().optional(),
 })
 
@@ -42,8 +47,14 @@ const settleSchema = z.object({
   workerAddress: z.string().optional(),
 })
 
-export function bountyRoutes(store: BountyStore, defaultNetwork: Network) {
+export function bountyRoutes(
+  store: BountyStore,
+  defaultNetwork: Network,
+  accounts?: AccountStore,
+  sessions?: SessionStore,
+) {
   const app = new Hono()
+  const requireAccounts = process.env.REQUIRE_ACCOUNT_FOR_CLAIM === 'true'
 
   app.get('/', (c) => {
     const status = c.req.query('status') as Bounty['status'] | undefined
@@ -81,6 +92,30 @@ export function bountyRoutes(store: BountyStore, defaultNetwork: Network) {
       requirements: body.requirements,
     })
 
+    const session = sessions
+      ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+      : undefined
+
+    let posterAccount = body.posterAccount
+    let posterPubKey = body.posterPubKey
+    if (session && accounts) {
+      const owned = accounts.getByNumber(session.accountNumber)
+      if (
+        !owned ||
+        owned.controllerKey !== session.controllerKey
+      ) {
+        return c.json(
+          {
+            error: 'stale_session',
+            note: 'Account ownership changed. Log in again.',
+          },
+          401,
+        )
+      }
+      posterAccount = session.accountNumber
+      posterPubKey = session.controllerKey
+    }
+
     const bounty: Bounty = {
       id,
       title: body.title,
@@ -90,7 +125,8 @@ export function bountyRoutes(store: BountyStore, defaultNetwork: Network) {
       amountSats: body.amountSats,
       contentHash: hash,
       status: 'open',
-      posterPubKey: body.posterPubKey,
+      posterPubKey,
+      posterAccount,
       escrowTxid: body.escrowTxid,
       createdAt: now,
       updatedAt: now,
@@ -98,6 +134,9 @@ export function bountyRoutes(store: BountyStore, defaultNetwork: Network) {
     }
 
     await store.create(bounty)
+    if (posterAccount != null && accounts) {
+      await accounts.bumpStat(posterAccount, 'bountiesPosted')
+    }
 
     const createActionTemplate =
       body.posterLockingScriptHex != null
@@ -147,10 +186,47 @@ export function bountyRoutes(store: BountyStore, defaultNetwork: Network) {
     if (existing.status !== 'open') {
       return c.json({ error: 'invalid_status', status: existing.status }, 409)
     }
+
+    const session = sessions
+      ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+      : undefined
+
+    let workerAccount = body.workerAccount
+    let workerPubKey = body.workerPubKey
+
+    if (session) {
+      workerAccount = session.accountNumber
+      workerPubKey = session.controllerKey
+    }
+
+    if (requireAccounts && workerAccount == null) {
+      return c.json(
+        {
+          error: 'account_required',
+          note: 'Mint + login to claim bounties (REQUIRE_ACCOUNT_FOR_CLAIM=true).',
+        },
+        401,
+      )
+    }
+
+    if (workerAccount != null && accounts) {
+      const acc = accounts.getByNumber(workerAccount)
+      if (!acc) return c.json({ error: 'invalid_worker_account' }, 400)
+      workerPubKey = workerPubKey ?? acc.controllerKey
+    }
+
+    if (!workerPubKey && workerAccount == null) {
+      return c.json({ error: 'worker_identity_required' }, 400)
+    }
+
     const updated = await store.update(existing.id, {
       status: 'claimed',
-      workerPubKey: body.workerPubKey,
+      workerPubKey: workerPubKey ?? undefined,
+      workerAccount: workerAccount ?? undefined,
     })
+    if (workerAccount != null && accounts) {
+      await accounts.bumpStat(workerAccount, 'bountiesClaimed')
+    }
     return c.json({
       bounty: updated,
       labels: [BRC100_LABELS.app, BRC100_LABELS.claim],
@@ -186,6 +262,13 @@ export function bountyRoutes(store: BountyStore, defaultNetwork: Network) {
       status: body.outcome === 'paid' ? 'paid' : 'refunded',
       settleTxid: body.settleTxid,
     })
+    if (
+      body.outcome === 'paid' &&
+      existing.workerAccount != null &&
+      accounts
+    ) {
+      await accounts.bumpStat(existing.workerAccount, 'bountiesCompleted')
+    }
     return c.json({
       bounty: updated,
       labels: [BRC100_LABELS.app, BRC100_LABELS.settle],

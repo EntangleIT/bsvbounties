@@ -49,6 +49,9 @@ export interface Bounty {
   status: BountyStatus
   posterPubKey?: string
   workerPubKey?: string
+  /** Phase 2: numbered account of poster / worker. */
+  posterAccount?: number
+  workerAccount?: number
   escrowTxid?: string
   settleTxid?: string
   workHash?: string
@@ -65,6 +68,7 @@ export interface CreateBountyInput {
   requirements?: string[]
   amountSats: number
   posterPubKey?: string
+  posterAccount?: number
   /** Optional: if already broadcast, register existing tx */
   escrowTxid?: string
   network?: Network
@@ -72,6 +76,7 @@ export interface CreateBountyInput {
 
 export interface ClaimBountyInput {
   workerPubKey: string
+  workerAccount?: number
   claimTxid?: string
 }
 

@@ -1,18 +1,40 @@
-import type { Bounty } from '@ai-bounties/shared'
+import type { Account, Bounty } from '@ai-bounties/shared'
 
 const API_BASE = import.meta.env.VITE_API_URL ?? ''
 
+let authToken: string | null =
+  typeof localStorage !== 'undefined' ? localStorage.getItem('aib_token') : null
+
+export function setAuthToken(token: string | null) {
+  authToken = token
+  if (typeof localStorage !== 'undefined') {
+    if (token) localStorage.setItem('aib_token', token)
+    else localStorage.removeItem('aib_token')
+  }
+}
+
+export function getAuthToken() {
+  return authToken
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(init?.headers as Record<string, string> | undefined),
+  }
+  if (authToken) headers.Authorization = `Bearer ${authToken}`
+
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
+    headers,
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(err.error ?? res.statusText)
+    throw new Error(
+      typeof err.error === 'string'
+        ? err.error
+        : err.note ?? res.statusText,
+    )
   }
   return res.json() as Promise<T>
 }
@@ -34,6 +56,7 @@ export function createBounty(body: {
   requirements?: string[]
   amountSats: number
   posterPubKey?: string
+  posterAccount?: number
   posterLockingScriptHex?: string
 }): Promise<{
   bounty: Bounty
@@ -50,10 +73,13 @@ export function createBounty(body: {
   })
 }
 
-export function claimBounty(id: string, workerPubKey: string) {
+export function claimBounty(
+  id: string,
+  opts?: { workerPubKey?: string; workerAccount?: number },
+) {
   return request(`/v1/bounties/${id}/claim`, {
     method: 'POST',
-    body: JSON.stringify({ workerPubKey }),
+    body: JSON.stringify(opts ?? {}),
   })
 }
 
@@ -84,4 +110,133 @@ export function attachEscrow(id: string, escrowTxid: string) {
     method: 'PATCH',
     body: JSON.stringify({ escrowTxid }),
   })
+}
+
+// --- Accounts ---
+
+export function listAccounts(forSale?: boolean) {
+  const q = forSale ? '?forSale=true' : ''
+  return request<{ items: Account[]; total: number }>(`/v1/accounts${q}`)
+}
+
+export function getMarketplace() {
+  return request<{ items: Account[]; total: number }>(
+    '/v1/accounts/marketplace',
+  )
+}
+
+export function mintAccount(body: {
+  controllerKey: string
+  displayName?: string
+  bio?: string
+  kind?: 'human' | 'agent'
+  preferredNumber?: number
+  ownerLockingScriptHex?: string
+}) {
+  return request<{
+    account: Account
+    createActionTemplate: unknown
+    note: string
+  }>('/v1/accounts/mint', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function listAccountForSale(number: number, priceSats: number) {
+  return request<{ account: Account }>(`/v1/accounts/${number}/list`, {
+    method: 'POST',
+    body: JSON.stringify({ priceSats }),
+  })
+}
+
+export function delistAccount(number: number) {
+  return request<{ account: Account }>(`/v1/accounts/${number}/delist`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function transferAccount(
+  number: number,
+  toControllerKey: string,
+  transferTxid?: string,
+) {
+  return request<{ account: Account }>(`/v1/accounts/${number}/transfer`, {
+    method: 'POST',
+    body: JSON.stringify({ toControllerKey, transferTxid }),
+  })
+}
+
+export function buyAccount(number: number, buyerControllerKey: string) {
+  return request<{
+    account: Account
+    session: { token: string; expiresAt: string; accountNumber: number }
+    paidSats: number
+  }>(`/v1/accounts/${number}/buy`, {
+    method: 'POST',
+    body: JSON.stringify({ buyerControllerKey }),
+  })
+}
+
+export function updateProfile(
+  number: number,
+  body: { displayName?: string; bio?: string },
+) {
+  return request<Account>(`/v1/accounts/${number}/profile`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+// --- Auth ---
+
+export function authChallenge(controllerKey: string) {
+  return request<{
+    challenge: string
+    message: string
+    expiresAt: string
+    authMode: string
+  }>('/v1/auth/challenge', {
+    method: 'POST',
+    body: JSON.stringify({ controllerKey }),
+  })
+}
+
+export function authLogin(body: {
+  controllerKey: string
+  challenge: string
+  signature: string
+  accountNumber?: number
+}) {
+  return request<{ token: string; expiresAt: string; account: Account }>(
+    '/v1/auth/login',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export function authMe() {
+  return request<{
+    session: { accountNumber: number; expiresAt: string; controllerKey: string }
+    account: Account
+  }>('/v1/auth/me')
+}
+
+export function authLogout() {
+  return request<{ ok: boolean }>('/v1/auth/logout', { method: 'POST' })
+}
+
+/** Demo signature matching API AUTH_MODE=demo. */
+export async function demoSign(
+  message: string,
+  controllerKey: string,
+): Promise<string> {
+  const data = new TextEncoder().encode(`${message}:${controllerKey}`)
+  const hash = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
 }

@@ -43,8 +43,8 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
       const wallet = getWallet()
       const identity = await wallet.getIdentityKey?.()
 
-      // Phase 1 demo: without a real locking script from the wallet,
-      // we index off-chain. When wallet can provide P2PKH script, pass it.
+      // Session (if logged in) attaches posterAccount on the API.
+      // Without locking script we index off-chain; template when script available.
       const created = await createBounty({
         title,
         description,

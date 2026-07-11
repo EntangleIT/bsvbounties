@@ -31,6 +31,12 @@ export function BountyCard({
       )}
       <div className="card-meta">
         <code title={bounty.id}>{bounty.id.slice(0, 10)}…</code>
+        {bounty.posterAccount != null && (
+          <span className="acct">poster #{bounty.posterAccount}</span>
+        )}
+        {bounty.workerAccount != null && (
+          <span className="acct">worker #{bounty.workerAccount}</span>
+        )}
         {bounty.escrowTxid && (
           <span className="txid" title={bounty.escrowTxid}>
             tx {bounty.escrowTxid.slice(0, 8)}…

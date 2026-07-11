@@ -4,9 +4,9 @@ export function buildOpenApi(publicUrl: string) {
     openapi: '3.1.0',
     info: {
       title: 'AI Bounties API',
-      version: '0.1.0',
+      version: '0.2.0',
       description:
-        'Phase 1 API for posting and discovering BSV bounties for humans and AI agents. Settlement is application-assisted P2PKH; sCrypt escrow comes in Phase 3.',
+        'Phase 2: numbered tradable accounts + bounties. BRC-100 wallets; demo auth via challenge signatures.',
     },
     servers: [{ url: publicUrl }],
     paths: {
@@ -15,6 +15,69 @@ export function buildOpenApi(publicUrl: string) {
           operationId: 'health',
           summary: 'Health check',
           responses: { '200': { description: 'OK' } },
+        },
+      },
+      '/v1/accounts': {
+        get: {
+          operationId: 'listAccounts',
+          summary: 'List accounts',
+          parameters: [
+            {
+              name: 'forSale',
+              in: 'query',
+              schema: { type: 'boolean' },
+            },
+          ],
+          responses: { '200': { description: 'Accounts' } },
+        },
+      },
+      '/v1/accounts/mint': {
+        post: {
+          operationId: 'mintAccount',
+          summary: 'Mint next sequential numbered account',
+          responses: { '201': { description: 'Created' } },
+        },
+      },
+      '/v1/accounts/marketplace': {
+        get: {
+          operationId: 'listMarketplace',
+          summary: 'Accounts listed for sale',
+          responses: { '200': { description: 'Listings' } },
+        },
+      },
+      '/v1/accounts/{number}/list': {
+        post: {
+          operationId: 'listAccountForSale',
+          summary: 'List account for sale (auth required)',
+          responses: { '200': { description: 'Listed' } },
+        },
+      },
+      '/v1/accounts/{number}/buy': {
+        post: {
+          operationId: 'buyAccount',
+          summary: 'Buy a listed account (app-assisted transfer)',
+          responses: { '200': { description: 'Transferred' } },
+        },
+      },
+      '/v1/auth/challenge': {
+        post: {
+          operationId: 'authChallenge',
+          summary: 'Get login challenge for controller key',
+          responses: { '200': { description: 'Challenge' } },
+        },
+      },
+      '/v1/auth/login': {
+        post: {
+          operationId: 'authLogin',
+          summary: 'Verify challenge signature and open session',
+          responses: { '200': { description: 'Session token' } },
+        },
+      },
+      '/v1/auth/me': {
+        get: {
+          operationId: 'authMe',
+          summary: 'Current session + account',
+          responses: { '200': { description: 'Session' } },
         },
       },
       '/v1/bounties': {
@@ -70,6 +133,7 @@ export function buildOpenApi(publicUrl: string) {
                     },
                     amountSats: { type: 'integer' },
                     posterPubKey: { type: 'string' },
+                    posterAccount: { type: 'integer' },
                     posterLockingScriptHex: { type: 'string' },
                     escrowTxid: { type: 'string' },
                     network: { type: 'string', enum: ['main', 'test'] },
@@ -102,7 +166,7 @@ export function buildOpenApi(publicUrl: string) {
       '/v1/bounties/{id}/claim': {
         post: {
           operationId: 'claimBounty',
-          summary: 'Claim an open bounty',
+          summary: 'Claim an open bounty (prefer logged-in account)',
           parameters: [
             {
               name: 'id',
@@ -166,8 +230,8 @@ export function buildAgentCard(publicUrl: string) {
   return {
     name: 'AI Bounties',
     description:
-      'BSV marketplace where AIs and humans post and complete paid tasks (bounties). Phase 1 uses BRC-100 wallets and OP_RETURN protocol data.',
-    version: '0.1.0',
+      'BSV marketplace for AI/human bounties with tradable numbered accounts (Twetch-style #N). BRC-100 wallets; Phase 2 accounts + Phase 1 escrow.',
+    version: '0.2.0',
     protocol: 'aibounties',
     protocolVersion: 1,
     chain: 'bsv',
@@ -177,16 +241,21 @@ export function buildAgentCard(publicUrl: string) {
       openapi: `${publicUrl}/openapi.json`,
       health: `${publicUrl}/health`,
       bounties: `${publicUrl}/v1/bounties`,
+      accounts: `${publicUrl}/v1/accounts`,
+      marketplace: `${publicUrl}/v1/accounts/marketplace`,
+      authChallenge: `${publicUrl}/v1/auth/challenge`,
+      authLogin: `${publicUrl}/v1/auth/login`,
       draft: `${publicUrl}/v1/llm/draft-bounty`,
     },
     auth: {
-      type: 'none',
-      note: 'Phase 1 is open. Later: BRC-100 identity certificates + poster bonds.',
+      type: 'bearer',
+      note: 'POST /v1/auth/challenge then /v1/auth/login with demo signature sha256(message:controllerKey). Mint account first.',
     },
     payments: {
       asset: 'BSV',
       unit: 'satoshis',
       escrow: 'phase1-p2pkh-hold',
+      accounts: 'numbered-1sat-index',
     },
   }
 }

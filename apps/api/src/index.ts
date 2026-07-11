@@ -7,7 +7,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Network } from '@ai-bounties/shared'
 import { BountyStore } from './store/bountyStore.js'
+import { AccountStore } from './store/accountStore.js'
+import { ChallengeStore, SessionStore } from './store/sessionStore.js'
 import { bountyRoutes } from './routes/bounties.js'
+import { accountRoutes } from './routes/accounts.js'
+import { authRoutes } from './routes/auth.js'
 import { llmRoutes } from './routes/llm.js'
 import { buildAgentCard, buildOpenApi } from './openapi.js'
 
@@ -15,7 +19,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '../../..')
 loadEnv({ path: path.join(rootDir, '.env') })
 
-// Prefer AI_BOUNTIES_PORT so a generic PORT in the shell does not steal the default.
 const PORT = Number(process.env.AI_BOUNTIES_PORT ?? process.env.PORT ?? 8787)
 const HOST = process.env.HOST ?? '0.0.0.0'
 const PUBLIC_URL = process.env.PUBLIC_URL ?? `http://localhost:${PORT}`
@@ -23,8 +26,14 @@ const WEB_ORIGIN = process.env.WEB_ORIGIN ?? 'http://localhost:5173'
 const NETWORK = (process.env.NETWORK ?? 'main') as Network
 const DATA_DIR = path.resolve(rootDir, process.env.DATA_DIR ?? './data')
 
-const store = new BountyStore(DATA_DIR)
-await store.init()
+const bountyStore = new BountyStore(DATA_DIR)
+const accountStore = new AccountStore(DATA_DIR)
+const sessionStore = new SessionStore(DATA_DIR)
+const challengeStore = new ChallengeStore()
+
+await bountyStore.init()
+await accountStore.init()
+await sessionStore.init()
 
 const app = new Hono()
 
@@ -42,10 +51,13 @@ app.get('/health', (c) =>
   c.json({
     ok: true,
     service: 'ai-bounties-api',
-    version: '0.1.0',
+    version: '0.2.0',
+    phase: 2,
     network: NETWORK,
-    bounties: store.count(),
-    open: store.count('open'),
+    bounties: bountyStore.count(),
+    open: bountyStore.count('open'),
+    accounts: accountStore.count(),
+    forSale: accountStore.listForSaleCount(),
   }),
 )
 
@@ -56,9 +68,10 @@ app.get('/.well-known/ai-plugin.json', (c) =>
     schema_version: 'v1',
     name_for_human: 'AI Bounties',
     name_for_model: 'ai_bounties',
-    description_for_human: 'Find and post BSV-paid bounties for AI agents and humans.',
+    description_for_human:
+      'Find and post BSV-paid bounties. Tradable numbered accounts (#1, #33…).',
     description_for_model:
-      'Use this API to list open bounties, post new bounties with BSV sat amounts, claim work, submit results, and settle payments. Prefer OpenAPI at /openapi.json.',
+      'Use this API to mint numbered accounts, log in, list/buy accounts, and post/claim BSV bounties. See /openapi.json.',
     auth: { type: 'none' },
     api: {
       type: 'openapi',
@@ -69,8 +82,13 @@ app.get('/.well-known/ai-plugin.json', (c) =>
   }),
 )
 
-app.route('/v1/bounties', bountyRoutes(store, NETWORK))
-app.route('/v1/llm', llmRoutes(store))
+app.route(
+  '/v1/bounties',
+  bountyRoutes(bountyStore, NETWORK, accountStore, sessionStore),
+)
+app.route('/v1/accounts', accountRoutes(accountStore, sessionStore, NETWORK))
+app.route('/v1/auth', authRoutes(accountStore, sessionStore, challengeStore))
+app.route('/v1/llm', llmRoutes(bountyStore))
 
 app.onError((err, c) => {
   console.error(err)
@@ -85,5 +103,6 @@ console.log(`  OpenAPI:  ${PUBLIC_URL}/openapi.json`)
 console.log(`  Agent:    ${PUBLIC_URL}/.well-known/agent.json`)
 console.log(`  Data:     ${DATA_DIR}`)
 console.log(`  Network:  ${NETWORK}`)
+console.log(`  Phase:    2 (accounts)`)
 
 serve({ fetch: app.fetch, port: PORT, hostname: HOST })
