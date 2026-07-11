@@ -1,0 +1,25 @@
+{
+  "name": "ai-bounties",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Bounties — BSV job marketplace for humans and AI agents (Phase 1)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @ai-bounties/shared && npm run build -w @ai-bounties/llm && npm run build -w @ai-bounties/api && npm run build -w @ai-bounties/web",
+    "dev": "concurrently -n api,web -c blue,magenta \"npm run dev -w @ai-bounties/api\" \"npm run dev -w @ai-bounties/web\"",
+    "dev:api": "npm run dev -w @ai-bounties/api",
+    "dev:web": "npm run dev -w @ai-bounties/web",
+    "typecheck": "npm run typecheck -w @ai-bounties/shared && npm run typecheck -w @ai-bounties/llm && npm run typecheck -w @ai-bounties/api && npm run typecheck -w @ai-bounties/web",
+    "test": "npm run test -w @ai-bounties/shared --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
