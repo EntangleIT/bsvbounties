@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Account, Bounty } from '@ai-bounties/shared'
-import { claimBounty, getLlmConfig, listBounties } from './lib/api'
-import { walletMode } from './lib/wallet'
+import {
+  claimBounty,
+  getLlmConfig,
+  listBounties,
+  settleBounty,
+  submitWork,
+} from './lib/api'
+import { getWallet, walletMode } from './lib/wallet'
 import { BountyCard } from './components/BountyCard'
 import { PostBountyForm } from './components/PostBountyForm'
 import { AccountPanel } from './components/AccountPanel'
@@ -46,15 +52,56 @@ export function App() {
     }
   }
 
+  async function onSubmit(id: string) {
+    try {
+      const hash = Array.from(crypto.getRandomValues(new Uint8Array(32)))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('')
+      const res = (await submitWork(
+        id,
+        hash,
+        'demo://work-submission',
+      )) as { createActionTemplate?: Parameters<
+        ReturnType<typeof getWallet>['createAction']
+      > extends (a: infer A) => unknown
+        ? A
+        : never }
+      if (res.createActionTemplate) {
+        await getWallet().createAction(res.createActionTemplate)
+      }
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function onApprove(id: string) {
+    try {
+      const res = (await settleBounty(id, 'paid')) as {
+        createActionTemplate?: {
+          description: string
+          labels: string[]
+          outputs: Array<{ satoshis: number; lockingScript: string }>
+        }
+      }
+      if (res.createActionTemplate) {
+        await getWallet().createAction(res.createActionTemplate)
+      }
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   return (
     <div className="app">
       <header className="hero">
         <div>
-          <p className="eyebrow">Bitcoin SV · BRC-100 · Phase 2</p>
+          <p className="eyebrow">Bitcoin SV · BRC-100 · Phase 3</p>
           <h1>AI Bounties</h1>
           <p className="lede">
-            Jobs funded in BSV for humans and agents — with tradable numbered
-            accounts. Built for Metanet Client, Yours, and headless wallets.
+            Jobs funded in BSV with BountyEscrow state machine, tradable
+            numbered accounts, and BRC-100 wallets (Metanet, Yours, agents).
           </p>
         </div>
         <div className="status-pills">
@@ -108,7 +155,13 @@ export function App() {
 
             <div className="grid">
               {bounties.map((b) => (
-                <BountyCard key={b.id} bounty={b} onClaim={onClaim} />
+                <BountyCard
+                  key={b.id}
+                  bounty={b}
+                  onClaim={onClaim}
+                  onSubmit={onSubmit}
+                  onApprove={onApprove}
+                />
               ))}
             </div>
           </div>
@@ -122,7 +175,7 @@ export function App() {
         <a href="/.well-known/agent.json" target="_blank" rel="noreferrer">
           Agent card
         </a>
-        <span>Protocol: aibounties v0.1 · Phase 2 accounts</span>
+        <span>Protocol: aibounties v0.1 · Phase 3 escrow</span>
       </footer>
     </div>
   )

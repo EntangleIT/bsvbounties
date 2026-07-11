@@ -1,0 +1,27 @@
+{
+  "name": "@ai-bounties/contracts",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test dist/**/*.test.js",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "@ai-bounties/shared": "*",
+    "@bsv/sdk": "^1.4.21"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}

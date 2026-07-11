@@ -1,4 +1,4 @@
-# AI Bounties Protocol v0.1 (Phase 1–2)
+# AI Bounties Protocol v0.1 (Phase 1–3)
 
 On-chain discovery + payment primitives for the AI Bounties marketplace.
 
@@ -60,7 +60,31 @@ Phase 1 does **not** use sCrypt covenants yet.
 2. Indexer records the bounty from OP_RETURN + sat amount.
 3. Settlement is **application-assisted**: poster pays worker and posts `BOUNTY_SETTLE`.
 
-Phase 3 replaces the hold with a proper `BountyEscrow` sCrypt contract.
+## Escrow (Phase 3 — BountyEscrow)
+
+State machine (see `packages/contracts`):
+
+| State | Code | Transitions |
+|-------|------|-------------|
+| OPEN | 0 | `claim` → CLAIMED; `cancel` → REFUNDED (poster) |
+| CLAIMED | 1 | `submit` → SUBMITTED; `approve` → PAID; `refund` after deadline; `resolve` arbiter |
+| SUBMITTED | 2 | `approve` → PAID; `refund` after deadline; `resolve` arbiter |
+| PAID / REFUNDED | 3 / 4 | terminal |
+
+**On-chain today (interim):**
+
+1. Deploy: value → poster P2PKH hold + `aibounties-escrow` OP_RETURN params + `BOUNTY_POST`
+2. Transitions validated by `applyTransition` and return BRC-100 `createActionTemplate`s
+3. Optional fee split: `feeBps` + `feePkh` on approve
+
+**sCrypt covenant:** full contract source in `packages/contracts/src/BountyEscrow.scrypt.ts` (compile with scrypt-ts when ready). Same rules as the TS state machine.
+
+API:
+
+- `POST /v1/bounties` with `useEscrow: true` (default when `posterPubKey` set)
+- `GET /v1/bounties/:id/escrow`
+- `POST /v1/bounties/:id/escrow/{approve|cancel|refund|resolve}`
+- claim/submit/settle also drive the escrow machine when `bounty.escrow` is present
 
 ## BRC-100 labels
 
@@ -71,6 +95,8 @@ Phase 3 replaces the hold with a proper `BountyEscrow` sCrypt contract.
 | `bounty:claim`        | claim            |
 | `bounty:submit`       | submit work      |
 | `bounty:settle`       | pay / refund     |
+| `escrow:deploy`       | deploy escrow    |
+| `escrow:claim` etc.   | escrow methods   |
 | `account:mint`        | mint account     |
 | `account:transfer`    | transfer / buy   |
 | `account:list`        | list for sale    |

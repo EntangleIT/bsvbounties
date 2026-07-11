@@ -195,6 +195,25 @@ h1 {
   color: var(--blue);
 }
 
+.badge.escrow {
+  color: #c4b5fd;
+  background: #1e1533;
+}
+
+.card-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
+
+.card-actions .btn {
+  margin-top: 0;
+  width: auto;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.85rem;
+}
+
 .panel,
 .card {
   background: var(--bg-card);

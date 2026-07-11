@@ -38,6 +38,24 @@ export interface BountyContent {
   requirements?: string[]
 }
 
+/** Escrow funding mode (Phase 3). */
+export type EscrowMode = 'none' | 'p2pkh' | 'scrypt'
+
+export interface BountyEscrowMeta {
+  mode: EscrowMode
+  /** Numeric escrow state: 0 open, 1 claimed, 2 submitted, 3 paid, 4 refunded */
+  state: number
+  posterPubKey: string
+  workerPubKey: string
+  arbiterPubKey: string
+  deadline: number
+  feeBps: number
+  feePkh: string
+  /** Last known escrow UTXO outpoint `txid:vout` */
+  outpoint?: string
+  lastTxid?: string
+}
+
 export interface Bounty {
   id: string
   title: string
@@ -56,6 +74,8 @@ export interface Bounty {
   settleTxid?: string
   workHash?: string
   workUri?: string
+  /** Phase 3 escrow covenant metadata */
+  escrow?: BountyEscrowMeta
   createdAt: string
   updatedAt: string
   network: Network

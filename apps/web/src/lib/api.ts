@@ -58,6 +58,9 @@ export function createBounty(body: {
   posterPubKey?: string
   posterAccount?: number
   posterLockingScriptHex?: string
+  useEscrow?: boolean
+  deadline?: number
+  arbiterPubKey?: string
 }): Promise<{
   bounty: Bounty
   createActionTemplate: {
@@ -69,7 +72,7 @@ export function createBounty(body: {
 }> {
   return request('/v1/bounties', {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify({ useEscrow: true, ...body }),
   })
 }
 
@@ -80,6 +83,35 @@ export function claimBounty(
   return request(`/v1/bounties/${id}/claim`, {
     method: 'POST',
     body: JSON.stringify(opts ?? {}),
+  })
+}
+
+export function submitWork(id: string, workHash: string, workUri?: string) {
+  return request(`/v1/bounties/${id}/submit`, {
+    method: 'POST',
+    body: JSON.stringify({ workHash, workUri }),
+  })
+}
+
+export function settleBounty(
+  id: string,
+  outcome: 'paid' | 'refunded',
+  settleTxid?: string,
+) {
+  return request(`/v1/bounties/${id}/settle`, {
+    method: 'POST',
+    body: JSON.stringify({ outcome, settleTxid }),
+  })
+}
+
+export function escrowAction(
+  id: string,
+  method: 'approve' | 'cancel' | 'refund' | 'resolve',
+  body: { signerPubKey: string; payWorker?: boolean; now?: number },
+) {
+  return request(`/v1/bounties/${id}/escrow/${method}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
   })
 }
 

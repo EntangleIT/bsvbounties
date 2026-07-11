@@ -7,8 +7,20 @@ import {
   contentHash,
   generateBountyId,
   type Bounty,
+  type BountyEscrowMeta,
   type Network,
 } from '@ai-bounties/shared'
+import {
+  applyTransition,
+  bountyStatusFromEscrow,
+  buildDeployEscrowTemplate,
+  buildTransitionTemplate,
+  escrowStateFromBountyStatus,
+  initialSnapshot,
+  type EscrowSnapshot,
+  type EscrowMethod,
+  EscrowState,
+} from '@ai-bounties/contracts'
 import type { BountyStore } from '../store/bountyStore.js'
 import type { AccountStore } from '../store/accountStore.js'
 import type { SessionStore } from '../store/sessionStore.js'
@@ -22,8 +34,15 @@ const createSchema = z.object({
   amountSats: z.number().int().positive(),
   posterPubKey: z.string().optional(),
   posterAccount: z.number().int().positive().optional(),
-  /** Hex locking script for poster P2PKH (escrow hold). If omitted, only indexes off-chain. */
+  /** Legacy Phase 1: simple P2PKH hold without escrow meta. */
   posterLockingScriptHex: z.string().optional(),
+  /** Phase 3: deploy full escrow (state machine + param OP_RETURN). */
+  useEscrow: z.boolean().optional().default(true),
+  arbiterPubKey: z.string().optional(),
+  /** Unix timestamp or block height; 0 = no timed refund. */
+  deadline: z.number().int().nonnegative().optional(),
+  feeBps: z.number().int().min(0).max(1000).optional(),
+  feePkh: z.string().optional(),
   escrowTxid: z.string().optional(),
   network: z.enum(['main', 'test']).optional(),
 })
@@ -32,6 +51,7 @@ const claimSchema = z.object({
   workerPubKey: z.string().min(4).optional(),
   workerAccount: z.number().int().positive().optional(),
   claimTxid: z.string().optional(),
+  workerLockingScriptHex: z.string().optional(),
 })
 
 const submitSchema = z.object({
@@ -45,7 +65,79 @@ const settleSchema = z.object({
   outcome: z.enum(['paid', 'refunded']),
   settleTxid: z.string().optional(),
   workerAddress: z.string().optional(),
+  workerLockingScriptHex: z.string().optional(),
+  feeLockingScriptHex: z.string().optional(),
 })
+
+const escrowActionSchema = z.object({
+  signerPubKey: z.string().min(4),
+  workerPubKey: z.string().optional(),
+  workHash: z.string().optional(),
+  payWorker: z.boolean().optional(),
+  now: z.number().optional(),
+  posterLockingScriptHex: z.string().optional(),
+  workerLockingScriptHex: z.string().optional(),
+  feeLockingScriptHex: z.string().optional(),
+  txid: z.string().optional(),
+})
+
+function defaultFeeBps(): number {
+  return Number(process.env.PLATFORM_FEE_BPS ?? 200)
+}
+
+function defaultFeePkh(): string {
+  return process.env.PLATFORM_FEE_PKH ?? ''
+}
+
+function snapshotFromBounty(b: Bounty): EscrowSnapshot | null {
+  if (b.escrow) {
+    return {
+      state: b.escrow.state as EscrowState,
+      amountSats: b.amountSats,
+      bountyId: b.id,
+      contentHash: b.contentHash,
+      posterPubKey: b.escrow.posterPubKey || b.posterPubKey || '',
+      workerPubKey: b.escrow.workerPubKey || b.workerPubKey || '',
+      arbiterPubKey: b.escrow.arbiterPubKey || '',
+      deadline: b.escrow.deadline,
+      workHash: b.workHash || '',
+      feeBps: b.escrow.feeBps,
+      feePkh: b.escrow.feePkh,
+    }
+  }
+  if (!b.posterPubKey) return null
+  return {
+    state: escrowStateFromBountyStatus(b.status) as EscrowState,
+    amountSats: b.amountSats,
+    bountyId: b.id,
+    contentHash: b.contentHash,
+    posterPubKey: b.posterPubKey,
+    workerPubKey: b.workerPubKey || '',
+    arbiterPubKey: '',
+    deadline: 0,
+    workHash: b.workHash || '',
+    feeBps: 0,
+    feePkh: '',
+  }
+}
+
+function metaFromSnapshot(
+  s: EscrowSnapshot,
+  mode: BountyEscrowMeta['mode'],
+  extra?: Partial<BountyEscrowMeta>,
+): BountyEscrowMeta {
+  return {
+    mode,
+    state: s.state,
+    posterPubKey: s.posterPubKey,
+    workerPubKey: s.workerPubKey,
+    arbiterPubKey: s.arbiterPubKey,
+    deadline: s.deadline,
+    feeBps: s.feeBps,
+    feePkh: s.feePkh,
+    ...extra,
+  }
+}
 
 export function bountyRoutes(
   store: BountyStore,
@@ -76,9 +168,25 @@ export function bountyRoutes(
     return c.json(b)
   })
 
+  app.get('/:id/escrow', (c) => {
+    const b = store.get(c.req.param('id'))
+    if (!b) return c.json({ error: 'not_found' }, 404)
+    const snap = snapshotFromBounty(b)
+    return c.json({
+      bountyId: b.id,
+      status: b.status,
+      escrow: b.escrow ?? null,
+      snapshot: snap,
+      contract: {
+        version: 1,
+        source: 'packages/contracts/src/BountyEscrow.scrypt.ts',
+        note: 'State machine enforced in app; sCrypt artifact optional for mainnet covenant.',
+      },
+    })
+  })
+
   /**
-   * Create / register a bounty.
-   * Returns the indexed bounty + optional BRC-100 createAction template.
+   * Create / register a bounty with optional Phase 3 escrow deploy template.
    */
   app.post('/', async (c) => {
     const body = createSchema.parse(await c.req.json())
@@ -100,10 +208,7 @@ export function bountyRoutes(
     let posterPubKey = body.posterPubKey
     if (session && accounts) {
       const owned = accounts.getByNumber(session.accountNumber)
-      if (
-        !owned ||
-        owned.controllerKey !== session.controllerKey
-      ) {
+      if (!owned || owned.controllerKey !== session.controllerKey) {
         return c.json(
           {
             error: 'stale_session',
@@ -114,6 +219,54 @@ export function bountyRoutes(
       }
       posterAccount = session.accountNumber
       posterPubKey = session.controllerKey
+    }
+
+    const useEscrow = body.useEscrow !== false
+    let escrow: BountyEscrowMeta | undefined
+    let createActionTemplate: unknown = null
+    let note: string
+
+    if (useEscrow && posterPubKey) {
+      const snap = initialSnapshot({
+        bountyId: id,
+        contentHash: hash,
+        amountSats: body.amountSats,
+        posterPubKey,
+        arbiterPubKey: body.arbiterPubKey,
+        deadline: body.deadline,
+        feeBps: body.feeBps ?? defaultFeeBps(),
+        feePkh: body.feePkh ?? defaultFeePkh(),
+      })
+      escrow = metaFromSnapshot(snap, 'scrypt')
+      createActionTemplate = buildDeployEscrowTemplate({
+        snapshot: snap,
+        title: body.title,
+        category: body.category,
+        posterLockingScriptHex: body.posterLockingScriptHex,
+      })
+      note =
+        'Phase 3 escrow deploy template ready. createAction, then PATCH /escrow with txid.'
+    } else if (body.posterLockingScriptHex) {
+      createActionTemplate = {
+        description: `Post AI Bounty: ${body.title}`,
+        labels: [BRC100_LABELS.app, BRC100_LABELS.post],
+        outputs: buildPostActionOutputs({
+          amountSats: body.amountSats,
+          posterLockingScriptHex: body.posterLockingScriptHex,
+          post: {
+            bountyId: id,
+            amountSats: body.amountSats,
+            contentHash: hash,
+            category: categoryFromLabel(body.category),
+            title: body.title,
+          },
+        }),
+      }
+      note =
+        'Phase 1 P2PKH template. Prefer useEscrow=true for Phase 3 state machine.'
+    } else {
+      note =
+        'Indexed off-chain only. Provide posterPubKey (and login) for escrow deploy template.'
     }
 
     const bounty: Bounty = {
@@ -128,6 +281,7 @@ export function bountyRoutes(
       posterPubKey,
       posterAccount,
       escrowTxid: body.escrowTxid,
+      escrow,
       createdAt: now,
       updatedAt: now,
       network: body.network ?? defaultNetwork,
@@ -138,54 +292,104 @@ export function bountyRoutes(
       await accounts.bumpStat(posterAccount, 'bountiesPosted')
     }
 
-    const createActionTemplate =
-      body.posterLockingScriptHex != null
-        ? {
-            description: `Post AI Bounty: ${body.title}`,
-            labels: [BRC100_LABELS.app, BRC100_LABELS.post],
-            outputs: buildPostActionOutputs({
-              amountSats: body.amountSats,
-              posterLockingScriptHex: body.posterLockingScriptHex,
-              post: {
-                bountyId: id,
-                amountSats: body.amountSats,
-                contentHash: hash,
-                category: categoryFromLabel(body.category),
-                title: body.title,
-              },
-            }),
-          }
-        : null
-
-    return c.json(
-      {
-        bounty,
-        createActionTemplate,
-        note: createActionTemplate
-          ? 'Pass createActionTemplate to your BRC-100 wallet createAction(), then PATCH escrowTxid.'
-          : 'Indexed off-chain only. Provide posterLockingScriptHex to get a BRC-100 action template.',
-      },
-      201,
-    )
+    return c.json({ bounty, createActionTemplate, note }, 201)
   })
 
-  /** Attach broadcast txid after wallet createAction. */
   app.patch('/:id/escrow', async (c) => {
-    const { escrowTxid } = z
-      .object({ escrowTxid: z.string().min(8) })
+    const body = z
+      .object({
+        escrowTxid: z.string().min(8),
+        outpoint: z.string().optional(),
+      })
       .parse(await c.req.json())
-    const updated = await store.update(c.req.param('id'), { escrowTxid })
-    if (!updated) return c.json({ error: 'not_found' }, 404)
+    const existing = store.get(c.req.param('id'))
+    if (!existing) return c.json({ error: 'not_found' }, 404)
+    const escrow = existing.escrow
+      ? {
+          ...existing.escrow,
+          lastTxid: body.escrowTxid,
+          outpoint: body.outpoint ?? `${body.escrowTxid}:0`,
+        }
+      : undefined
+    const updated = await store.update(c.req.param('id'), {
+      escrowTxid: body.escrowTxid,
+      escrow,
+    })
     return c.json(updated)
   })
+
+  async function runEscrowMethod(
+    bountyId: string,
+    method: EscrowMethod,
+    body: z.infer<typeof escrowActionSchema>,
+    sessionWorker?: { workerPubKey?: string; workerAccount?: number },
+  ) {
+    const existing = store.get(bountyId)
+    if (!existing) return { error: 'not_found' as const, status: 404 as const }
+    const snap = snapshotFromBounty(existing)
+    if (!snap) {
+      return {
+        error: 'no_escrow' as const,
+        status: 400 as const,
+        note: 'Bounty has no escrow snapshot; recreate with useEscrow + posterPubKey.',
+      }
+    }
+
+    const signer = body.signerPubKey
+    const result = applyTransition(snap, {
+      method,
+      signerPubKey: signer,
+      workerPubKey: body.workerPubKey ?? sessionWorker?.workerPubKey,
+      workHash: body.workHash,
+      payWorker: body.payWorker,
+      now: body.now,
+    })
+
+    if (!result.ok) {
+      return { error: result.error, status: 409 as const }
+    }
+
+    const template = buildTransitionTemplate({
+      current: snap,
+      transition: result,
+      method,
+      posterLockingScriptHex: body.posterLockingScriptHex,
+      workerLockingScriptHex: body.workerLockingScriptHex,
+      feeLockingScriptHex: body.feeLockingScriptHex,
+    })
+
+    const nextStatus = bountyStatusFromEscrow(result.next.state) as Bounty['status']
+    const escrow = metaFromSnapshot(result.next, existing.escrow?.mode ?? 'scrypt', {
+      lastTxid: body.txid,
+      outpoint: body.txid ? `${body.txid}:0` : existing.escrow?.outpoint,
+    })
+
+    const patch: Partial<Bounty> = {
+      status: nextStatus,
+      escrow,
+      workerPubKey: result.next.workerPubKey || existing.workerPubKey,
+      workHash: result.next.workHash || existing.workHash,
+    }
+    if (sessionWorker?.workerAccount != null) {
+      patch.workerAccount = sessionWorker.workerAccount
+    }
+    if (nextStatus === 'paid' || nextStatus === 'refunded') {
+      patch.settleTxid = body.txid
+    }
+
+    const updated = await store.update(existing.id, patch)
+    return {
+      bounty: updated,
+      transition: result,
+      createActionTemplate: template,
+      labels: template.labels,
+    }
+  }
 
   app.post('/:id/claim', async (c) => {
     const body = claimSchema.parse(await c.req.json())
     const existing = store.get(c.req.param('id'))
     if (!existing) return c.json({ error: 'not_found' }, 404)
-    if (existing.status !== 'open') {
-      return c.json({ error: 'invalid_status', status: existing.status }, 409)
-    }
 
     const session = sessions
       ? getSessionFromRequest(sessions, c.req.header('Authorization'))
@@ -215,13 +419,39 @@ export function bountyRoutes(
       workerPubKey = workerPubKey ?? acc.controllerKey
     }
 
-    if (!workerPubKey && workerAccount == null) {
+    if (!workerPubKey) {
       return c.json({ error: 'worker_identity_required' }, 400)
     }
 
+    // Phase 3 path when escrow meta present
+    if (existing.escrow) {
+      const action = await runEscrowMethod(
+        existing.id,
+        'claim',
+        {
+          signerPubKey: workerPubKey,
+          workerPubKey,
+          txid: body.claimTxid,
+          workerLockingScriptHex: body.workerLockingScriptHex,
+        },
+        { workerPubKey, workerAccount },
+      )
+      if ('error' in action && action.error) {
+        return c.json(action, action.status ?? 400)
+      }
+      if (workerAccount != null && accounts) {
+        await accounts.bumpStat(workerAccount, 'bountiesClaimed')
+      }
+      return c.json(action)
+    }
+
+    // Legacy Phase 1/2 claim
+    if (existing.status !== 'open') {
+      return c.json({ error: 'invalid_status', status: existing.status }, 409)
+    }
     const updated = await store.update(existing.id, {
       status: 'claimed',
-      workerPubKey: workerPubKey ?? undefined,
+      workerPubKey,
       workerAccount: workerAccount ?? undefined,
     })
     if (workerAccount != null && accounts) {
@@ -237,6 +467,30 @@ export function bountyRoutes(
     const body = submitSchema.parse(await c.req.json())
     const existing = store.get(c.req.param('id'))
     if (!existing) return c.json({ error: 'not_found' }, 404)
+
+    if (existing.escrow) {
+      const session = sessions
+        ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+        : undefined
+      const signer =
+        session?.controllerKey ??
+        existing.workerPubKey ??
+        existing.escrow.workerPubKey
+      if (!signer) return c.json({ error: 'worker_identity_required' }, 400)
+      const action = await runEscrowMethod(existing.id, 'submit', {
+        signerPubKey: signer,
+        workHash: body.workHash,
+        txid: body.submitTxid,
+      })
+      if ('error' in action && action.error) {
+        return c.json(action, action.status ?? 400)
+      }
+      const withUri = await store.update(existing.id, {
+        workUri: body.workUri,
+      })
+      return c.json({ ...action, bounty: withUri ?? action.bounty })
+    }
+
     if (existing.status !== 'claimed' && existing.status !== 'submitted') {
       return c.json({ error: 'invalid_status', status: existing.status }, 409)
     }
@@ -255,6 +509,63 @@ export function bountyRoutes(
     const body = settleSchema.parse(await c.req.json())
     const existing = store.get(c.req.param('id'))
     if (!existing) return c.json({ error: 'not_found' }, 404)
+
+    if (existing.escrow) {
+      const session = sessions
+        ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+        : undefined
+      const signer =
+        session?.controllerKey ??
+        existing.posterPubKey ??
+        existing.escrow.posterPubKey
+      if (!signer) return c.json({ error: 'poster_identity_required' }, 400)
+
+      const method: EscrowMethod =
+        body.outcome === 'paid' ? 'approve' : 'cancel'
+      // refund uses deadline path when claimed; cancel only if open
+      let action
+      if (body.outcome === 'refunded' && existing.status !== 'open') {
+        action = await runEscrowMethod(existing.id, 'refund', {
+          signerPubKey: signer,
+          txid: body.settleTxid,
+          posterLockingScriptHex: undefined,
+          workerLockingScriptHex: body.workerLockingScriptHex,
+          feeLockingScriptHex: body.feeLockingScriptHex,
+          now: Math.floor(Date.now() / 1000),
+        })
+        if ('error' in action && action.error === 'deadline_not_reached') {
+          // Allow arbiter-less app-level refund for Phase 3 demo via cancel-style payout
+          // only if still open; otherwise require deadline or resolve
+          return c.json(
+            {
+              error: 'deadline_not_reached',
+              note: 'Use POST /:id/escrow/resolve as arbiter, or wait for deadline.',
+            },
+            409,
+          )
+        }
+      } else {
+        action = await runEscrowMethod(existing.id, method, {
+          signerPubKey: signer,
+          txid: body.settleTxid,
+          workerLockingScriptHex: body.workerLockingScriptHex,
+          feeLockingScriptHex: body.feeLockingScriptHex,
+        })
+      }
+
+      if ('error' in action && action.error) {
+        return c.json(action, action.status ?? 400)
+      }
+      if (
+        body.outcome === 'paid' &&
+        existing.workerAccount != null &&
+        accounts
+      ) {
+        await accounts.bumpStat(existing.workerAccount, 'bountiesCompleted')
+      }
+      return c.json(action)
+    }
+
     if (!['claimed', 'submitted', 'open'].includes(existing.status)) {
       return c.json({ error: 'invalid_status', status: existing.status }, 409)
     }
@@ -274,6 +585,40 @@ export function bountyRoutes(
       labels: [BRC100_LABELS.app, BRC100_LABELS.settle],
     })
   })
+
+  // Explicit escrow methods (Phase 3)
+  for (const method of [
+    'claim',
+    'submit',
+    'approve',
+    'cancel',
+    'refund',
+    'resolve',
+  ] as EscrowMethod[]) {
+    if (method === 'claim' || method === 'submit') continue // already have routes
+    app.post(`/:id/escrow/${method}`, async (c) => {
+      const body = escrowActionSchema.parse(await c.req.json())
+      const session = sessions
+        ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+        : undefined
+      const signer = session?.controllerKey ?? body.signerPubKey
+      const action = await runEscrowMethod(c.req.param('id'), method, {
+        ...body,
+        signerPubKey: signer,
+      })
+      if ('error' in action && action.error) {
+        return c.json(action, action.status ?? 400)
+      }
+      if (
+        method === 'approve' &&
+        action.bounty?.workerAccount != null &&
+        accounts
+      ) {
+        await accounts.bumpStat(action.bounty.workerAccount, 'bountiesCompleted')
+      }
+      return c.json(action)
+    })
+  }
 
   return app
 }

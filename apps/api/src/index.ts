@@ -51,8 +51,8 @@ app.get('/health', (c) =>
   c.json({
     ok: true,
     service: 'ai-bounties-api',
-    version: '0.2.0',
-    phase: 2,
+    version: '0.3.0',
+    phase: 3,
     network: NETWORK,
     bounties: bountyStore.count(),
     open: bountyStore.count('open'),
@@ -103,6 +103,6 @@ console.log(`  OpenAPI:  ${PUBLIC_URL}/openapi.json`)
 console.log(`  Agent:    ${PUBLIC_URL}/.well-known/agent.json`)
 console.log(`  Data:     ${DATA_DIR}`)
 console.log(`  Network:  ${NETWORK}`)
-console.log(`  Phase:    2 (accounts)`)
+console.log(`  Phase:    3 (escrow)`)
 
 serve({ fetch: app.fetch, port: PORT, hostname: HOST })

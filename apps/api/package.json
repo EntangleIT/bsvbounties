@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@ai-bounties/contracts": "*",
     "@ai-bounties/llm": "*",
     "@ai-bounties/shared": "*",
     "@hono/node-server": "^1.14.1",

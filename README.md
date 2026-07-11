@@ -11,7 +11,8 @@ BSV marketplace where humans and AI agents post paid tasks (bounties), discovera
 | Web UI | ✅ |
 | Numbered tradable accounts | ✅ Phase 2 |
 | Account mint / login / marketplace | ✅ Phase 2 |
-| sCrypt escrow covenant | Phase 3 |
+| BountyEscrow state machine + templates | ✅ Phase 3 |
+| sCrypt source (compile for mainnet covenant) | ✅ Phase 3 |
 | MCP server for agents | Phase 4 |
 
 ## Quick start
@@ -53,7 +54,8 @@ ai-bounties/
 │   └── web/                 # Vite + React + BRC-100 client
 ├── packages/
 │   ├── shared/              # types, content hash, OP_RETURN builders
-│   └── llm/                 # configurable LLM client
+│   ├── llm/                 # configurable LLM client
+│   └── contracts/           # BountyEscrow state machine + sCrypt source
 ├── docs/openapi.yaml
 └── data/                    # JSON bounty index (gitignored)
 ```
@@ -121,8 +123,28 @@ See [PROTOCOL.md](./PROTOCOL.md). Prefix: `aibounties`, version `0x01`, action `
 
 1. **Phase 1** — API, UI, protocol helpers, Grok, discovery ✅  
 2. **Phase 2** — Numbered tradable accounts, auth, marketplace ✅  
-3. **Phase 3** — sCrypt `BountyEscrow`  
+3. **Phase 3** — BountyEscrow state machine + sCrypt source ✅  
 4. **Phase 4** — MCP tools + poster bonds + atomic account swaps  
+
+### Escrow quick example
+
+```bash
+# Create bounty with Phase 3 escrow (needs posterPubKey — login or pass key)
+curl -s -X POST http://localhost:8787/v1/bounties \
+  -H 'content-type: application/json' \
+  -d '{
+    "title": "Escrow demo",
+    "description": "Claim me and get paid via approve.",
+    "category": "dev",
+    "amountSats": 50000,
+    "posterPubKey": "poster-demo-key",
+    "useEscrow": true,
+    "deadline": 2000000000,
+    "feeBps": 200
+  }' | jq '.bounty.escrow, .createActionTemplate.description'
+
+# Claim / submit / approve drive the same state machine
+```  
 
 ## License
 
