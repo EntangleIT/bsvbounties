@@ -1,0 +1,45 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "bsv-bounties",
+  "main": "apps/api/src/worker.ts",
+  "compatibility_date": "2026-08-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "vars": {
+    "NETWORK": "test",
+    "ESCROW_MODE": "app",
+    "AUTH_MODE": "demo",
+    "PUBLIC_URL": "https://entangleit.com/bsvbounties",
+    "WEB_ORIGIN": "https://entangleit.com",
+    "REQUIRE_POSTER_BOND": "false",
+    "REQUIRE_WORKER_BOND": "false",
+    "LLM_PROVIDER": "xai",
+    "LLM_MODEL": "grok-3"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "AI_BOUNTIES"
+    }
+  ],
+  "assets": {
+    "directory": "./apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "html_handling": "auto-trailing-slash",
+    "run_worker_first": true
+  },
+  "routes": [
+    {
+      "pattern": "entangleit.com/bsvbounties*",
+      "zone_name": "entangleit.com"
+    }
+  ],
+  "alias": {
+    "scrypt-ts": "./apps/api/src/cf-stubs/scrypt-ts.ts"
+  }
+}

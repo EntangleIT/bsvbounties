@@ -17,7 +17,7 @@
     "compile": "node scripts/compile-scrypt.mjs",
     "compile:and:build": "npm run compile && npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test dist/**/*.test.js",
+    "test": "node --import tsx --test src/**/*.test.ts",
     "testnet:fund-info": "tsx src/testnet/fundInfo.ts",
     "testnet:deploy-demo": "tsx src/testnet/deployDemo.ts",
     "dev": "tsc -p tsconfig.json --watch"

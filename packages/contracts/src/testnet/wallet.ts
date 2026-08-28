@@ -10,7 +10,14 @@ import {
 } from './config.js'
 import { getAddressBalance } from './woc.js'
 
-const require = createRequire(import.meta.url)
+let require: NodeRequire
+try {
+  require = createRequire(import.meta.url)
+} catch {
+  require = ((id: string) => {
+    throw new Error(`require unavailable (${id})`)
+  }) as unknown as NodeRequire
+}
 
 export function getScryptNetwork() {
   const { bsv } = require('scrypt-ts') as typeof import('scrypt-ts')

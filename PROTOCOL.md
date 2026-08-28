@@ -24,6 +24,8 @@ OP_FALSE OP_RETURN
 | 0x02 | `BOUNTY_CLAIM`  | bountyId(16) + workerPubKeyHash(20) |
 | 0x03 | `BOUNTY_SUBMIT` | bountyId(16) + workHash(32) |
 | 0x04 | `BOUNTY_SETTLE` | bountyId(16) + outcome(1)  // 0=paid 1=refunded |
+| 0x05 | `BOUNTY_MILESTONE` | (app-index; optional on-chain later) |
+| 0x06 | `BOUNTY_DISPUTE` | (app-index; LLM or pubkey arbiter) |
 
 ## Actions — accounts (Phase 2)
 
@@ -85,6 +87,27 @@ API:
 - `GET /v1/bounties/:id/escrow`
 - `POST /v1/bounties/:id/escrow/{approve|cancel|refund|resolve}`
 - claim/submit/settle also drive the escrow machine when `bounty.escrow` is present
+- `POST /v1/bounties/:id/dispute` — LLM arbiter (`arbiter: "llm"`) or pubkey `resolve`
+
+## Verifiable acceptance (Phase 6)
+
+Job bodies still live off-chain. `acceptance` is committed in `contentHash`.
+
+| `kind` | Happy path |
+|--------|------------|
+| `manual` | Poster approves (legacy) |
+| `http` | GET/POST `url` or `workUri`; status + optional `jsonPath` / `regex` |
+| `schema` | `workUri` JSON matches a JSON Schema subset |
+| `command` | Re-fetch `workUri`, SHA-256 must match `expectedHash` or `workHash` |
+| `llm-judge` | LLM scores the artifact vs `requirements` |
+
+Non-manual pass **auto-approves** escrow (`asVerifier`). Fail stays `submitted` for resubmit.
+
+`milestones[]` must sum to `amountSats`. Each passing verify releases that slice in the app index; the last slice approves escrow.
+
+## Worker bonds (Phase 6)
+
+Same store as poster bonds with `role: "worker"`. `REQUIRE_WORKER_BOND=true` gates claims. Slash on deadline refund, LLM-arbiter loss, or fraudulent verify.
 
 ## BRC-100 labels
 

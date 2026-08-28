@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Bounty } from '@ai-bounties/shared'
 
 function satsLabel(sats: number): string {
@@ -19,17 +20,29 @@ export function BountyCard({
   onClaim,
   onSubmit,
   onApprove,
+  onDispute,
 }: {
   bounty: Bounty
   onClaim?: (id: string) => void
-  onSubmit?: (id: string) => void
+  onSubmit?: (id: string, workUri: string) => void
   onApprove?: (id: string) => void
+  onDispute?: (id: string) => void
 }) {
+  const [workUri, setWorkUri] = useState(bounty.workUri ?? '')
+  const acceptKind = bounty.acceptance?.kind ?? 'manual'
+  const released = bounty.releasedSats ?? 0
+
   return (
     <article className="card">
       <div className="card-top">
         <span className={`badge status-${bounty.status}`}>{bounty.status}</span>
         <span className="badge category">{bounty.category}</span>
+        <span className="badge accept" title="Acceptance">
+          {acceptKind}
+        </span>
+        {bounty.arbiterMode && bounty.arbiterMode !== 'none' && (
+          <span className="badge escrow">arbiter {bounty.arbiterMode}</span>
+        )}
         {bounty.escrow && (
           <span className="badge escrow" title="Phase 3 escrow">
             escrow {ESCROW_STATE[bounty.escrow.state] ?? bounty.escrow.state}
@@ -45,6 +58,19 @@ export function BountyCard({
             <li key={r}>{r}</li>
           ))}
         </ul>
+      )}
+      {bounty.milestones && bounty.milestones.length > 0 && (
+        <p className="muted small">
+          Milestones: {bounty.milestones.filter((m) => m.status === 'paid').length}/
+          {bounty.milestones.length} paid
+          {released > 0 ? ` · ${satsLabel(released)} released` : ''}
+        </p>
+      )}
+      {bounty.lastVerification && (
+        <p className={bounty.lastVerification.passed ? 'ok' : 'err'}>
+          Verify: {bounty.lastVerification.passed ? 'pass' : 'fail'} —{' '}
+          {bounty.lastVerification.reason}
+        </p>
       )}
       <div className="card-meta">
         <code title={bounty.id}>{bounty.id.slice(0, 10)}…</code>
@@ -63,6 +89,16 @@ export function BountyCard({
           </span>
         )}
       </div>
+      {(bounty.status === 'claimed' || bounty.status === 'submitted') && onSubmit && (
+        <label className="work-uri">
+          Work URI
+          <input
+            value={workUri}
+            onChange={(e) => setWorkUri(e.target.value)}
+            placeholder="https://… or http://127.0.0.1:9876/"
+          />
+        </label>
+      )}
       <div className="card-actions">
         {bounty.status === 'open' && onClaim && (
           <button type="button" className="btn secondary" onClick={() => onClaim(bounty.id)}>
@@ -70,13 +106,24 @@ export function BountyCard({
           </button>
         )}
         {(bounty.status === 'claimed' || bounty.status === 'submitted') && onSubmit && (
-          <button type="button" className="btn secondary" onClick={() => onSubmit(bounty.id)}>
+          <button
+            type="button"
+            className="btn secondary"
+            onClick={() => onSubmit(bounty.id, workUri)}
+          >
             Submit work
           </button>
         )}
-        {(bounty.status === 'claimed' || bounty.status === 'submitted') && onApprove && (
-          <button type="button" className="btn secondary" onClick={() => onApprove(bounty.id)}>
-            Approve pay
+        {(bounty.status === 'claimed' || bounty.status === 'submitted') &&
+          acceptKind === 'manual' &&
+          onApprove && (
+            <button type="button" className="btn secondary" onClick={() => onApprove(bounty.id)}>
+              Approve pay
+            </button>
+          )}
+        {(bounty.status === 'claimed' || bounty.status === 'submitted') && onDispute && (
+          <button type="button" className="btn secondary" onClick={() => onDispute(bounty.id)}>
+            Dispute
           </button>
         )}
       </div>

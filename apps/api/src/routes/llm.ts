@@ -4,11 +4,18 @@ import {
   createLlmFromEnv,
   draftBountyMessages,
   rankBountiesMessages,
+  rankWorkersMessages,
   type LlmClient,
 } from '@ai-bounties/llm'
+import { reputationOf } from '@ai-bounties/shared'
 import type { BountyStore } from '../store/bountyStore.js'
+import type { AccountStore } from '../store/accountStore.js'
 
-export function llmRoutes(store: BountyStore, client?: LlmClient) {
+export function llmRoutes(
+  store: BountyStore,
+  accounts?: AccountStore,
+  client?: LlmClient,
+) {
   const llm = client ?? createLlmFromEnv()
   const app = new Hono()
 
@@ -84,6 +91,88 @@ export function llmRoutes(store: BountyStore, client?: LlmClient) {
     return c.json({
       ...parsed,
       open,
+      provider: res.provider,
+      model: res.model,
+    })
+  })
+
+  app.post('/rank-workers', async (c) => {
+    const body = z
+      .object({
+        bountyId: z.string().optional(),
+        skills: z.string().optional(),
+        limit: z.number().int().positive().max(50).optional(),
+      })
+      .parse(await c.req.json())
+
+    if (!accounts) {
+      return c.json({ error: 'accounts_unavailable' }, 503)
+    }
+
+    const bounty = body.bountyId ? store.get(body.bountyId) : undefined
+    const workers = accounts
+      .list({ kind: 'agent', limit: body.limit ?? 40 })
+      .concat(accounts.list({ kind: 'human', limit: body.limit ?? 40 }))
+    const unique = [
+      ...new Map(workers.map((w) => [w.number, w])).values(),
+    ].slice(0, body.limit ?? 40)
+
+    const payload = unique.map((w) => ({
+      number: w.number,
+      displayName: w.displayName,
+      kind: w.kind,
+      skills: w.skills,
+      capabilities: w.capabilities,
+      stats: w.stats,
+      reputation: reputationOf(w),
+    }))
+
+    if (payload.length === 0) {
+      return c.json({
+        rankedNumbers: [],
+        notes: 'No accounts to rank',
+        workers: [],
+      })
+    }
+
+    const res = await llm.chat({
+      messages: rankWorkersMessages({
+        bounty: bounty
+          ? {
+              id: bounty.id,
+              title: bounty.title,
+              description: bounty.description,
+              amountSats: bounty.amountSats,
+              category: bounty.category,
+            }
+          : {
+              id: 'ad-hoc',
+              title: body.skills ?? 'open work',
+              description: body.skills ?? '',
+              amountSats: 0,
+            },
+        workers: payload.map((w) => ({
+          number: w.number,
+          displayName: w.displayName,
+          kind: w.kind,
+          skills: w.skills,
+          capabilities: w.capabilities,
+          stats: w.stats,
+        })),
+      }),
+      temperature: 0.2,
+    })
+
+    let parsed: { rankedNumbers?: number[]; notes?: string } = {}
+    try {
+      parsed = JSON.parse(res.content) as typeof parsed
+    } catch {
+      parsed = { notes: res.content }
+    }
+
+    return c.json({
+      ...parsed,
+      workers: payload,
       provider: res.provider,
       model: res.model,
     })

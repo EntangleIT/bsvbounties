@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
   BRC100_LABELS,
   buildMintAccountActionOutputs,
+  reputationOf,
   sha256Hex,
   type AccountKind,
   type Network,
@@ -48,7 +49,7 @@ export function accountRoutes(
     const offset = Number(c.req.query('offset') ?? 0)
     const items = accounts.list({ forSale, kind, controllerKey, limit, offset })
     return c.json({
-      items,
+      items: items.map((a) => ({ ...a, reputation: reputationOf(a) })),
       total: forSale ? accounts.listForSaleCount() : accounts.count(),
     })
   })
@@ -72,6 +73,9 @@ export function accountRoutes(
         mintTxid: z.string().optional(),
         ownerLockingScriptHex: z.string().optional(),
         network: z.enum(['main', 'test']).optional(),
+        skills: z.array(z.string().min(1).max(40)).max(24).optional(),
+        capabilities: z.array(z.string().min(1).max(40)).max(24).optional(),
+        callback: z.string().max(300).optional(),
       })
       .parse(await c.req.json())
 
@@ -97,6 +101,9 @@ export function accountRoutes(
         preferredNumber: body.preferredNumber,
         mintTxid: body.mintTxid,
         network: body.network ?? defaultNetwork,
+        skills: body.skills,
+        capabilities: body.capabilities,
+        callback: body.callback,
       })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -140,7 +147,7 @@ export function accountRoutes(
     if (!Number.isFinite(n)) return c.json({ error: 'invalid_number' }, 400)
     const a = accounts.getByNumber(n)
     if (!a) return c.json({ error: 'not_found' }, 404)
-    return c.json(a)
+    return c.json({ ...a, reputation: reputationOf(a) })
   })
 
   app.patch('/:number/mint-txid', async (c) => {
@@ -172,6 +179,9 @@ export function accountRoutes(
         displayName: z.string().min(1).max(64).optional(),
         bio: z.string().max(500).optional(),
         kind: z.enum(['human', 'agent']).optional(),
+        skills: z.array(z.string().min(1).max(40)).max(24).optional(),
+        capabilities: z.array(z.string().min(1).max(40)).max(24).optional(),
+        callback: z.string().max(300).optional(),
       })
       .parse(await c.req.json())
     const a = accounts.getByNumber(n)

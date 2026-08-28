@@ -18,17 +18,24 @@
     "dev:mcp": "npm run dev -w @ai-bounties/mcp",
     "postinstall": "node scripts/ensure-esbuild.js",
     "typecheck": "npm run typecheck -w @ai-bounties/shared && npm run typecheck -w @ai-bounties/llm && npm run typecheck -w @ai-bounties/contracts && npm run typecheck -w @ai-bounties/api && npm run typecheck -w @ai-bounties/web && npm run typecheck -w @ai-bounties/mcp",
-    "test": "npm run test -w @ai-bounties/shared --if-present && npm run test -w @ai-bounties/contracts --if-present"
+    "test": "npm run test -w @ai-bounties/shared --if-present && npm run test -w @ai-bounties/contracts --if-present",
+    "accept:api": "node scripts/acceptance-api.mjs",
+    "accept:mcp": "npm run build -w @ai-bounties/mcp && node scripts/mcp-smoke.mjs",
+    "accept:testnet": "node scripts/testnet-acceptance.mjs",
+    "golden": "node apps/worker/golden-path.mjs",
+    "worker:hunt": "node apps/worker/hunt.mjs",
+    "deploy:cf": "npm run build:libs && VITE_BASE=/bsvbounties/ VITE_API_URL=/bsvbounties npm run build -w @ai-bounties/web && wrangler deploy"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "wrangler": "^4.65.0"
   },
   "optionalDependencies": {
-    "@esbuild/darwin-arm64": "^0.25.0",
-    "@esbuild/darwin-x64": "^0.25.0",
-    "@esbuild/linux-arm64": "^0.25.0",
-    "@esbuild/linux-x64": "^0.25.0"
+    "@esbuild/darwin-arm64": "^0.28.0",
+    "@esbuild/darwin-x64": "^0.28.0",
+    "@esbuild/linux-arm64": "^0.28.0",
+    "@esbuild/linux-x64": "^0.28.0"
   },
   "engines": {
     "node": ">=20"

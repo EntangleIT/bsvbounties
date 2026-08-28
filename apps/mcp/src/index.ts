@@ -15,7 +15,7 @@ import { api, apiBase } from './client.js'
 
 const server = new McpServer({
   name: 'ai-bounties',
-  version: '0.4.0',
+  version: '0.6.0',
 })
 
 function text(data: unknown) {
@@ -61,7 +61,7 @@ server.tool(
 
 server.tool(
   'create_bounty',
-  'Create a bounty with Phase 3 escrow when posterPubKey is set. May require poster bond.',
+  'Create a bounty with optional escrow, acceptance spec, and LLM arbiter.',
   {
     title: z.string(),
     description: z.string(),
@@ -71,13 +71,53 @@ server.tool(
     token: z.string().optional().describe('Bearer session token'),
     deadline: z.number().int().optional(),
     useEscrow: z.boolean().optional(),
+    arbiter: z.string().optional().describe('"llm" or a pubkey'),
+    acceptanceKind: z
+      .enum(['manual', 'http', 'schema', 'command', 'llm-judge'])
+      .optional(),
+    acceptanceUrl: z.string().optional(),
+    jsonPath: z.string().optional(),
+    expectJson: z
+      .string()
+      .optional()
+      .describe('JSON-encoded expected value for http jsonPath'),
   },
   async (args) => {
-    const { token, useEscrow, ...rest } = args
+    const {
+      token,
+      useEscrow,
+      arbiter,
+      acceptanceKind,
+      acceptanceUrl,
+      jsonPath,
+      expectJson,
+      ...rest
+    } = args
+    let expect: unknown
+    if (expectJson) {
+      try {
+        expect = JSON.parse(expectJson)
+      } catch {
+        expect = expectJson
+      }
+    }
+    const acceptance = acceptanceKind
+      ? {
+          kind: acceptanceKind,
+          url: acceptanceUrl,
+          jsonPath,
+          expect,
+        }
+      : undefined
     return text(
       await api('/v1/bounties', {
         method: 'POST',
-        body: JSON.stringify({ ...rest, useEscrow: useEscrow ?? true }),
+        body: JSON.stringify({
+          ...rest,
+          useEscrow: useEscrow ?? true,
+          arbiter,
+          acceptance,
+        }),
         token,
       }),
     )
@@ -104,18 +144,20 @@ server.tool(
 
 server.tool(
   'submit_work',
-  'Submit work hash/uri for a claimed bounty',
+  'Submit work hash/uri for a claimed bounty (verifier may auto-approve)',
   {
     id: z.string(),
-    workHash: z.string(),
+    workHash: z.string().optional(),
     workUri: z.string().optional(),
+    notes: z.string().optional(),
+    milestoneIndex: z.number().int().nonnegative().optional(),
     token: z.string().optional(),
   },
-  async ({ id, workHash, workUri, token }) =>
+  async ({ id, workHash, workUri, notes, milestoneIndex, token }) =>
     text(
       await api(`/v1/bounties/${id}/submit`, {
         method: 'POST',
-        body: JSON.stringify({ workHash, workUri }),
+        body: JSON.stringify({ workHash, workUri, notes, milestoneIndex }),
         token,
       }),
     ),
@@ -275,6 +317,132 @@ server.tool(
       await api('/v1/auth/login', {
         method: 'POST',
         body: JSON.stringify(body),
+      }),
+    ),
+)
+
+server.tool(
+  'rank_bounties',
+  'Rank open bounties for worker skills (LLM)',
+  {
+    skills: z.string(),
+    limit: z.number().int().positive().max(50).optional(),
+  },
+  async ({ skills, limit }) =>
+    text(
+      await api('/v1/llm/rank-bounties', {
+        method: 'POST',
+        body: JSON.stringify({ skills, limit }),
+      }),
+    ),
+)
+
+server.tool(
+  'rank_workers',
+  'Rank numbered accounts for a bounty (LLM)',
+  {
+    bountyId: z.string().optional(),
+    skills: z.string().optional(),
+  },
+  async ({ bountyId, skills }) =>
+    text(
+      await api('/v1/llm/rank-workers', {
+        method: 'POST',
+        body: JSON.stringify({ bountyId, skills }),
+      }),
+    ),
+)
+
+server.tool(
+  'escrow_cancel',
+  'Cancel an OPEN escrow bounty (poster)',
+  {
+    id: z.string(),
+    signerPubKey: z.string(),
+    token: z.string().optional(),
+  },
+  async ({ id, signerPubKey, token }) =>
+    text(
+      await api(`/v1/bounties/${id}/escrow/cancel`, {
+        method: 'POST',
+        body: JSON.stringify({ signerPubKey }),
+        token,
+      }),
+    ),
+)
+
+server.tool(
+  'escrow_refund',
+  'Refund after deadline (poster)',
+  {
+    id: z.string(),
+    signerPubKey: z.string(),
+    token: z.string().optional(),
+  },
+  async ({ id, signerPubKey, token }) =>
+    text(
+      await api(`/v1/bounties/${id}/escrow/refund`, {
+        method: 'POST',
+        body: JSON.stringify({
+          signerPubKey,
+          now: Math.floor(Date.now() / 1000),
+        }),
+        token,
+      }),
+    ),
+)
+
+server.tool(
+  'escrow_resolve',
+  'Arbiter resolve: pay worker or refund poster',
+  {
+    id: z.string(),
+    signerPubKey: z.string(),
+    payWorker: z.boolean(),
+    token: z.string().optional(),
+  },
+  async ({ id, signerPubKey, payWorker, token }) =>
+    text(
+      await api(`/v1/bounties/${id}/escrow/resolve`, {
+        method: 'POST',
+        body: JSON.stringify({ signerPubKey, payWorker }),
+        token,
+      }),
+    ),
+)
+
+server.tool(
+  'dispute_bounty',
+  'Open a dispute (LLM arbiter if the bounty was created with arbiter=llm)',
+  {
+    id: z.string(),
+    reason: z.string().optional(),
+    token: z.string().optional(),
+  },
+  async ({ id, reason, token }) =>
+    text(
+      await api(`/v1/bounties/${id}/dispute`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+        token,
+      }),
+    ),
+)
+
+server.tool(
+  'deposit_worker_bond',
+  'Deposit a worker bond (required when REQUIRE_WORKER_BOND=true)',
+  {
+    controllerKey: z.string(),
+    amountSats: z.number().int().positive(),
+    token: z.string().optional(),
+  },
+  async ({ controllerKey, amountSats, token }) =>
+    text(
+      await api('/v1/bonds/deposit', {
+        method: 'POST',
+        body: JSON.stringify({ controllerKey, amountSats, role: 'worker' }),
+        token,
       }),
     ),
 )

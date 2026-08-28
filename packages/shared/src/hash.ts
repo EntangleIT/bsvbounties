@@ -4,13 +4,15 @@ import type { BountyContent } from './types.js'
 
 /** Stable JSON for hashing (sorted keys, no whitespace variance). */
 export function canonicalizeContent(content: BountyContent): string {
-  const ordered: BountyContent = {
+  const ordered: Record<string, unknown> = {
     category: content.category,
     description: content.description,
     requirements: content.requirements ?? [],
     title: content.title,
     version: 1,
   }
+  if (content.acceptance) ordered.acceptance = content.acceptance
+  if (content.milestones) ordered.milestones = content.milestones
   return JSON.stringify(ordered)
 }
 

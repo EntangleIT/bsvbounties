@@ -1,10 +1,20 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { buildBondDepositTemplate } from '@ai-bounties/contracts'
-import type { Network } from '@ai-bounties/shared'
+import type { BondRole, Network } from '@ai-bounties/shared'
 import type { BondStore } from '../store/bondStore.js'
 import type { SessionStore } from '../store/sessionStore.js'
 import { getSessionFromRequest } from './auth.js'
+
+function posterMin(): number {
+  return Number(process.env.POSTER_BOND_MIN_SATS ?? 10_000)
+}
+
+function workerMin(): number {
+  return Number(
+    process.env.WORKER_BOND_MIN_SATS ?? process.env.POSTER_BOND_MIN_SATS ?? 10_000,
+  )
+}
 
 export function bondRoutes(
   bonds: BondStore,
@@ -12,30 +22,37 @@ export function bondRoutes(
   defaultNetwork: Network,
 ) {
   const app = new Hono()
-  const minBond = Number(process.env.POSTER_BOND_MIN_SATS ?? 10_000)
-  const requireBond = process.env.REQUIRE_POSTER_BOND === 'true'
 
   app.get('/config', (c) =>
     c.json({
-      requirePosterBond: requireBond,
-      minBondSats: minBond,
+      requirePosterBond: process.env.REQUIRE_POSTER_BOND === 'true',
+      requireWorkerBond: process.env.REQUIRE_WORKER_BOND === 'true',
+      minBondSats: posterMin(),
+      minWorkerBondSats: workerMin(),
       activeBonds: bonds.countActive(),
     }),
   )
 
   app.get('/', (c) => {
     const key = c.req.query('controllerKey') ?? undefined
-    return c.json({ items: bonds.list(key), total: bonds.list(key).length })
+    const role = c.req.query('role') as BondRole | undefined
+    const items = bonds.list(key, role)
+    return c.json({ items, total: items.length })
   })
 
   app.get('/:controllerKey', (c) => {
     const key = c.req.param('controllerKey')
-    const active = bonds.getActive(key)
+    const poster = bonds.getActive(key, 'poster')
+    const worker = bonds.getActive(key, 'worker')
     return c.json({
-      active: active ?? null,
+      active: poster ?? null,
+      poster: poster ?? null,
+      worker: worker ?? null,
       history: bonds.list(key),
-      meetsMinimum: bonds.meetsMinimum(key, minBond),
-      minBondSats: minBond,
+      meetsMinimum: bonds.meetsMinimum(key, posterMin(), 'poster'),
+      meetsWorkerMinimum: bonds.meetsMinimum(key, workerMin(), 'worker'),
+      minBondSats: posterMin(),
+      minWorkerBondSats: workerMin(),
     })
   })
 
@@ -47,6 +64,7 @@ export function bondRoutes(
         accountNumber: z.number().int().positive().optional(),
         depositTxid: z.string().optional(),
         vaultLockingScriptHex: z.string().optional(),
+        role: z.enum(['poster', 'worker']).optional().default('poster'),
       })
       .parse(await c.req.json())
 
@@ -55,15 +73,21 @@ export function bondRoutes(
       c.req.header('Authorization'),
     )
     const controllerKey = session?.controllerKey ?? body.controllerKey
+    const role = body.role
+    const minBond = role === 'worker' ? workerMin() : posterMin()
+    const requireBond =
+      role === 'worker'
+        ? process.env.REQUIRE_WORKER_BOND === 'true'
+        : process.env.REQUIRE_POSTER_BOND === 'true'
 
-    if (body.amountSats < minBond && !bonds.getActive(controllerKey)) {
-      // First deposit must reach min if enforcement is on; still allow smaller top-ups later
+    if (body.amountSats < minBond && !bonds.getActive(controllerKey, role)) {
       if (requireBond && body.amountSats < minBond) {
         return c.json(
           {
             error: 'below_minimum',
             minBondSats: minBond,
-            note: `Deposit at least ${minBond} sats for a poster bond.`,
+            role,
+            note: `Deposit at least ${minBond} sats for a ${role} bond.`,
           },
           400,
         )
@@ -76,6 +100,7 @@ export function bondRoutes(
       accountNumber: body.accountNumber ?? session?.accountNumber,
       depositTxid: body.depositTxid,
       network: defaultNetwork,
+      role,
     })
 
     const createActionTemplate = buildBondDepositTemplate({
@@ -99,6 +124,7 @@ export function bondRoutes(
       .object({
         controllerKey: z.string().min(4),
         releaseTxid: z.string().optional(),
+        role: z.enum(['poster', 'worker']).optional().default('poster'),
       })
       .parse(await c.req.json())
 
@@ -111,13 +137,12 @@ export function bondRoutes(
       return c.json({ error: 'forbidden' }, 403)
     }
 
-    const bond = await bonds.release(controllerKey, body.releaseTxid)
+    const bond = await bonds.release(controllerKey, body.releaseTxid, body.role)
     if (!bond) return c.json({ error: 'no_active_bond' }, 404)
     return c.json({ bond })
   })
 
   app.post('/slash', async (c) => {
-    // Platform operator action (protect with secret in production)
     const secret = process.env.PLATFORM_ADMIN_SECRET
     if (secret && c.req.header('X-Admin-Secret') !== secret) {
       return c.json({ error: 'forbidden' }, 403)
@@ -126,10 +151,11 @@ export function bondRoutes(
       .object({
         controllerKey: z.string().min(4),
         reason: z.string().min(3).max(500),
+        role: z.enum(['poster', 'worker']).optional().default('poster'),
       })
       .parse(await c.req.json())
 
-    const bond = await bonds.slash(body.controllerKey, body.reason)
+    const bond = await bonds.slash(body.controllerKey, body.reason, body.role)
     if (!bond) return c.json({ error: 'no_active_bond' }, 404)
     return c.json({ bond })
   })
@@ -147,12 +173,32 @@ export function bondGate(
     return {
       ok: false,
       error: 'poster_bond_required',
-      minBondSats: Number(process.env.POSTER_BOND_MIN_SATS ?? 10_000),
+      minBondSats: posterMin(),
     }
   }
-  const min = Number(process.env.POSTER_BOND_MIN_SATS ?? 10_000)
-  if (!bonds.meetsMinimum(controllerKey, min)) {
+  const min = posterMin()
+  if (!bonds.meetsMinimum(controllerKey, min, 'poster')) {
     return { ok: false, error: 'poster_bond_insufficient', minBondSats: min }
+  }
+  return { ok: true }
+}
+
+export function workerBondGate(
+  bonds: BondStore,
+  controllerKey: string | undefined,
+): { ok: true } | { ok: false; error: string; minBondSats: number } {
+  const requireBond = process.env.REQUIRE_WORKER_BOND === 'true'
+  if (!requireBond) return { ok: true }
+  if (!controllerKey) {
+    return {
+      ok: false,
+      error: 'worker_bond_required',
+      minBondSats: workerMin(),
+    }
+  }
+  const min = workerMin()
+  if (!bonds.meetsMinimum(controllerKey, min, 'worker')) {
+    return { ok: false, error: 'worker_bond_insufficient', minBondSats: min }
   }
   return { ok: true }
 }

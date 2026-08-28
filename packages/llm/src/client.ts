@@ -143,7 +143,60 @@ function mockChat(req: LlmChatRequest, config: LlmConfig): LlmChatResponse {
     return { content, provider: config.provider, model: config.model }
   }
 
-  if (system.includes('Rank open bounties') || system.includes('rank')) {
+  if (system.includes('You score a work submission') || system.includes('You are an escrow arbiter')) {
+    const fail = /\bFAIL\b/i.test(text) || /\bfraud\b/i.test(text)
+    const fraud = /\bfraud\b/i.test(text)
+    return {
+      content: JSON.stringify({
+        pass: !fail,
+        score: fail ? 0.2 : 0.85,
+        reason: fail ? 'Mock judge: FAIL/fraud token present.' : 'Mock judge: pass.',
+        fraud,
+      }),
+      provider: config.provider,
+      model: config.model,
+    }
+  }
+
+  if (system.includes('Rank open bounties')) {
+    let rankedIds: string[] = []
+    try {
+      const m = text.match(/Bounties:\n([\s\S]*)/)
+      const bounties = m?.[1] ? (JSON.parse(m[1]) as Array<{ id: string }>) : []
+      rankedIds = bounties.map((b) => b.id)
+    } catch {
+      rankedIds = []
+    }
+    return {
+      content: JSON.stringify({
+        rankedIds,
+        notes: 'Mock ranker: identity order. Set XAI_API_KEY for real ranking.',
+      }),
+      provider: config.provider,
+      model: config.model,
+    }
+  }
+
+  if (system.includes('rank numbered worker')) {
+    let rankedNumbers: number[] = []
+    try {
+      const m = text.match(/Workers:\n([\s\S]*)/)
+      const workers = m?.[1] ? (JSON.parse(m[1]) as Array<{ number: number }>) : []
+      rankedNumbers = workers.map((w) => w.number)
+    } catch {
+      rankedNumbers = []
+    }
+    return {
+      content: JSON.stringify({
+        rankedNumbers,
+        notes: 'Mock worker ranker: identity order.',
+      }),
+      provider: config.provider,
+      model: config.model,
+    }
+  }
+
+  if (system.includes('rank')) {
     return {
       content: JSON.stringify({
         rankedIds: [],

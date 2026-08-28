@@ -1,4 +1,5 @@
 import type { Network } from './types.js'
+import { median } from './acceptance.js'
 
 /** Protocol actions for Phase 2 accounts (0x10+). */
 export enum AccountAction {
@@ -29,11 +30,70 @@ export interface Account {
   createdAt: string
   updatedAt: string
   network: Network
-  /** Soft stats (indexed). */
-  stats: {
-    bountiesPosted: number
-    bountiesCompleted: number
-    bountiesClaimed: number
+  /** Matchable skills (reputation stays with the number on transfer). */
+  skills: string[]
+  capabilities: string[]
+  /** HTTPS callback or MCP hint for agent workers. */
+  callback?: string
+  /** Soft stats (indexed). Travel with #N when sold. */
+  stats: AccountStats
+}
+
+export interface AccountStats {
+  bountiesPosted: number
+  bountiesCompleted: number
+  bountiesClaimed: number
+  verifiesPassed: number
+  verifiesFailed: number
+  slashes: number
+  /** Last 32 submit latencies (ms) for median time-to-submit. */
+  submitDurationsMs: number[]
+}
+
+export interface AccountReputation {
+  verifyPassRate: number | null
+  medianTimeToSubmitMs: number | null
+  slashes: number
+}
+
+export const EMPTY_ACCOUNT_STATS: AccountStats = {
+  bountiesPosted: 0,
+  bountiesCompleted: 0,
+  bountiesClaimed: 0,
+  verifiesPassed: 0,
+  verifiesFailed: 0,
+  slashes: 0,
+  submitDurationsMs: [],
+}
+
+export function mergeAccountStats(
+  stats?: Partial<AccountStats> | AccountStats,
+): AccountStats {
+  return {
+    ...EMPTY_ACCOUNT_STATS,
+    ...stats,
+    submitDurationsMs: Array.isArray(stats?.submitDurationsMs)
+      ? stats.submitDurationsMs
+      : [],
+  }
+}
+
+export function reputationOf(account: Account): AccountReputation {
+  const s = mergeAccountStats(account.stats)
+  const judged = s.verifiesPassed + s.verifiesFailed
+  return {
+    verifyPassRate: judged === 0 ? null : s.verifiesPassed / judged,
+    medianTimeToSubmitMs: median(s.submitDurationsMs),
+    slashes: s.slashes,
+  }
+}
+
+export function normalizeAccount(account: Account): Account {
+  return {
+    ...account,
+    skills: account.skills ?? [],
+    capabilities: account.capabilities ?? [],
+    stats: mergeAccountStats(account.stats),
   }
 }
 
@@ -46,6 +106,9 @@ export interface MintAccountInput {
   preferredNumber?: number
   mintTxid?: string
   network?: Network
+  skills?: string[]
+  capabilities?: string[]
+  callback?: string
 }
 
 export interface TransferAccountInput {
@@ -63,6 +126,9 @@ export interface UpdateAccountProfileInput {
   displayName?: string
   bio?: string
   kind?: AccountKind
+  skills?: string[]
+  capabilities?: string[]
+  callback?: string
 }
 
 export interface ListAccountsQuery {

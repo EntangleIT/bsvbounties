@@ -8,8 +8,22 @@ import { fileURLToPath } from 'node:url'
 import type { EscrowSnapshot } from './escrowState.js'
 import { EscrowState } from './escrowState.js'
 
-const require = createRequire(import.meta.url)
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
+let require: NodeRequire
+try {
+  require = createRequire(import.meta.url)
+} catch {
+  require = ((id: string) => {
+    throw new Error(`require unavailable (${id})`)
+  }) as unknown as NodeRequire
+}
+
+let dirname = '.'
+try {
+  dirname = path.dirname(fileURLToPath(import.meta.url))
+} catch {
+  dirname = '.'
+}
+const __dirname = dirname
 
 function findFile(names: string[]): string {
   const bases = [
@@ -21,7 +35,11 @@ function findFile(names: string[]): string {
   for (const base of bases) {
     for (const name of names) {
       const p = path.join(base, name)
-      if (fs.existsSync(p)) return p
+      try {
+        if (typeof fs.existsSync === 'function' && fs.existsSync(p)) return p
+      } catch {
+        /* Workers may not expose existsSync */
+      }
     }
   }
   throw new Error(`Not found: ${names.join(' or ')}`)
@@ -36,6 +54,7 @@ export function getArtifactPath(): string {
 
 export function isScryptArtifactAvailable(): boolean {
   try {
+    if (typeof fs.existsSync !== 'function') return false
     getArtifactPath()
     return true
   } catch {

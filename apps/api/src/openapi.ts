@@ -4,9 +4,9 @@ export function buildOpenApi(publicUrl: string) {
     openapi: '3.1.0',
     info: {
       title: 'AI Bounties API',
-      version: '0.4.0',
+      version: '0.6.0',
       description:
-        'Phase 4: MCP tools, poster bonds, atomic account swaps, escrow, numbered accounts. BRC-100 wallets.',
+        'Phase 6: verifiable acceptance, auto-release, worker bonds, milestones, LLM arbiter. MCP + BRC-100.',
     },
     servers: [{ url: publicUrl }],
     paths: {
@@ -135,6 +135,10 @@ export function buildOpenApi(publicUrl: string) {
                     posterPubKey: { type: 'string' },
                     posterAccount: { type: 'integer' },
                     posterLockingScriptHex: { type: 'string' },
+                    useEscrow: { type: 'boolean' },
+                    arbiter: { type: 'string', description: '"llm" or pubkey' },
+                    acceptance: { type: 'object' },
+                    milestones: { type: 'array' },
                     escrowTxid: { type: 'string' },
                     network: { type: 'string', enum: ['main', 'test'] },
                   },
@@ -208,6 +212,28 @@ export function buildOpenApi(publicUrl: string) {
           responses: { '200': { description: 'Settled' } },
         },
       },
+      '/v1/bounties/{id}/dispute': {
+        post: {
+          operationId: 'disputeBounty',
+          summary: 'LLM or pubkey arbiter dispute',
+          parameters: [
+            {
+              name: 'id',
+              in: 'path',
+              required: true,
+              schema: { type: 'string' },
+            },
+          ],
+          responses: { '200': { description: 'Resolved' } },
+        },
+      },
+      '/v1/llm/rank-workers': {
+        post: {
+          operationId: 'rankWorkers',
+          summary: 'Rank numbered accounts for a bounty',
+          responses: { '200': { description: 'Ranking' } },
+        },
+      },
       '/v1/llm/draft-bounty': {
         post: {
           operationId: 'draftBounty',
@@ -251,8 +277,8 @@ export function buildAgentCard(publicUrl: string) {
   return {
     name: 'AI Bounties',
     description:
-      'BSV marketplace for AI/human bounties with tradable numbered accounts (Twetch-style #N). BRC-100 wallets; Phase 2 accounts + Phase 1 escrow.',
-    version: '0.4.0',
+      'BSV marketplace for AI/human bounties with machine-verifiable work, auto-release escrow, and tradable numbered accounts.',
+    version: '0.6.0',
     protocol: 'aibounties',
     protocolVersion: 1,
     chain: 'bsv',
@@ -275,6 +301,9 @@ export function buildAgentCard(publicUrl: string) {
       authChallenge: `${publicUrl}/v1/auth/challenge`,
       authLogin: `${publicUrl}/v1/auth/login`,
       draft: `${publicUrl}/v1/llm/draft-bounty`,
+      rank: `${publicUrl}/v1/llm/rank-bounties`,
+      rankWorkers: `${publicUrl}/v1/llm/rank-workers`,
+      dispute: `${publicUrl}/v1/bounties/{id}/dispute`,
     },
     auth: {
       type: 'bearer',
@@ -283,9 +312,9 @@ export function buildAgentCard(publicUrl: string) {
     payments: {
       asset: 'BSV',
       unit: 'satoshis',
-      escrow: 'phase3-bounty-escrow-state-machine',
+      escrow: 'phase3-bounty-escrow-state-machine + auto-release verifier',
       accounts: 'numbered-1sat-index',
-      bonds: 'poster-bond-deposit',
+      bonds: 'poster-and-worker-bonds',
       accountSale: 'atomic-swap-template',
     },
   }

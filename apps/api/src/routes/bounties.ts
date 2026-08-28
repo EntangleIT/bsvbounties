@@ -2,12 +2,23 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import {
   BRC100_LABELS,
+  LLM_ARBITER_PUBKEY,
+  VERIFIER_PUBKEY,
   buildPostActionOutputs,
   categoryFromLabel,
   contentHash,
+  defaultAcceptance,
   generateBountyId,
+  initMilestones,
+  isAutoRelease,
+  parseAcceptance,
+  sha256Hex,
+  validateMilestones,
+  type AcceptanceSpec,
+  type ArbiterMode,
   type Bounty,
   type BountyEscrowMeta,
+  type Milestone,
   type Network,
 } from '@ai-bounties/shared'
 import {
@@ -26,12 +37,26 @@ import {
   type EscrowMethod,
   EscrowState,
 } from '@ai-bounties/contracts'
+import type { LlmClient } from '@ai-bounties/llm'
 import type { BountyStore } from '../store/bountyStore.js'
 import type { AccountStore } from '../store/accountStore.js'
 import type { SessionStore } from '../store/sessionStore.js'
 import type { BondStore } from '../store/bondStore.js'
 import { getSessionFromRequest } from './auth.js'
-import { bondGate } from './bonds.js'
+import { bondGate, workerBondGate } from './bonds.js'
+import { runBountyVerifier, runLlmArbiter } from '../verifyFlow.js'
+
+const acceptanceSchema = z
+  .object({
+    kind: z.enum(['manual', 'http', 'schema', 'command', 'llm-judge']),
+  })
+  .passthrough()
+
+const milestoneSchema = z.object({
+  title: z.string().max(120).optional(),
+  amountSats: z.number().int().positive(),
+  acceptance: acceptanceSchema,
+})
 
 const createSchema = z.object({
   title: z.string().min(3).max(120),
@@ -46,6 +71,9 @@ const createSchema = z.object({
   /** Phase 3: deploy full escrow (state machine + param OP_RETURN). */
   useEscrow: z.boolean().optional().default(true),
   arbiterPubKey: z.string().optional(),
+  arbiter: z.union([z.literal('llm'), z.string()]).optional(),
+  acceptance: acceptanceSchema.optional(),
+  milestones: z.array(milestoneSchema).optional(),
   /** Unix timestamp or block height; 0 = no timed refund. */
   deadline: z.number().int().nonnegative().optional(),
   feeBps: z.number().int().min(0).max(1000).optional(),
@@ -61,12 +89,17 @@ const claimSchema = z.object({
   workerLockingScriptHex: z.string().optional(),
 })
 
-const submitSchema = z.object({
-  workHash: z.string().min(16),
-  workUri: z.string().optional(),
-  notes: z.string().optional(),
-  submitTxid: z.string().optional(),
-})
+const submitSchema = z
+  .object({
+    workHash: z.string().min(16).optional(),
+    workUri: z.string().optional(),
+    notes: z.string().max(4000).optional(),
+    submitTxid: z.string().optional(),
+    milestoneIndex: z.number().int().nonnegative().optional(),
+  })
+  .refine((d) => Boolean(d.workHash || d.workUri || d.notes), {
+    message: 'workHash_or_workUri_required',
+  })
 
 const settleSchema = z.object({
   outcome: z.enum(['paid', 'refunded']),
@@ -86,6 +119,7 @@ const escrowActionSchema = z.object({
   workerLockingScriptHex: z.string().optional(),
   feeLockingScriptHex: z.string().optional(),
   txid: z.string().optional(),
+  asVerifier: z.boolean().optional(),
 })
 
 function defaultFeeBps(): number {
@@ -152,6 +186,7 @@ export function bountyRoutes(
   accounts?: AccountStore,
   sessions?: SessionStore,
   bonds?: BondStore,
+  llm?: LlmClient,
 ) {
   const app = new Hono()
   const requireAccounts = process.env.REQUIRE_ACCOUNT_FOR_CLAIM === 'true'
@@ -209,12 +244,52 @@ export function bountyRoutes(
     const body = createSchema.parse(await c.req.json())
     const id = generateBountyId()
     const now = new Date().toISOString()
+    const acceptance = parseAcceptance(body.acceptance ?? defaultAcceptance())
+    const milestoneErr = validateMilestones(
+      body.amountSats,
+      body.milestones?.map((m) => ({
+        title: m.title,
+        amountSats: m.amountSats,
+        acceptance: parseAcceptance(m.acceptance),
+      })),
+    )
+    if (milestoneErr) {
+      return c.json({ error: milestoneErr }, 400)
+    }
+    const milestones = body.milestones?.length
+      ? initMilestones(
+          body.milestones.map((m) => ({
+            title: m.title,
+            amountSats: m.amountSats,
+            acceptance: parseAcceptance(m.acceptance),
+          })),
+        )
+      : undefined
+
+    let arbiterMode: ArbiterMode = 'none'
+    let arbiterPubKey = body.arbiterPubKey
+    if (body.arbiter === 'llm' || arbiterPubKey === 'llm') {
+      arbiterMode = 'llm'
+      arbiterPubKey = LLM_ARBITER_PUBKEY
+    } else if (body.arbiter && body.arbiter !== 'llm') {
+      arbiterMode = 'pubkey'
+      arbiterPubKey = arbiterPubKey || body.arbiter
+    } else if (arbiterPubKey) {
+      arbiterMode = 'pubkey'
+    }
+
     const hash = contentHash({
       version: 1,
       title: body.title,
       description: body.description,
       category: body.category,
       requirements: body.requirements,
+      acceptance,
+      milestones: body.milestones?.map((m) => ({
+        title: m.title,
+        amountSats: m.amountSats,
+        acceptance: parseAcceptance(m.acceptance),
+      })),
     })
 
     const session = sessions
@@ -263,7 +338,7 @@ export function bountyRoutes(
         contentHash: hash,
         amountSats: body.amountSats,
         posterPubKey,
-        arbiterPubKey: body.arbiterPubKey,
+        arbiterPubKey,
         deadline: body.deadline,
         feeBps: body.feeBps ?? defaultFeeBps(),
         feePkh: body.feePkh ?? defaultFeePkh(),
@@ -344,6 +419,11 @@ export function bountyRoutes(
       posterAccount,
       escrowTxid: body.escrowTxid,
       escrow,
+      acceptance,
+      arbiterMode,
+      milestones,
+      currentMilestone: milestones?.length ? 0 : undefined,
+      releasedSats: 0,
       createdAt: now,
       updatedAt: now,
       network: body.network ?? defaultNetwork,
@@ -405,6 +485,7 @@ export function bountyRoutes(
       workHash: body.workHash,
       payWorker: body.payWorker,
       now: body.now,
+      asVerifier: body.asVerifier,
     })
 
     if (!result.ok) {
@@ -434,6 +515,9 @@ export function bountyRoutes(
     }
     if (sessionWorker?.workerAccount != null) {
       patch.workerAccount = sessionWorker.workerAccount
+    }
+    if (method === 'claim') {
+      patch.claimedAt = existing.claimedAt ?? new Date().toISOString()
     }
     if (nextStatus === 'paid' || nextStatus === 'refunded') {
       patch.settleTxid = body.txid
@@ -485,6 +569,20 @@ export function bountyRoutes(
       return c.json({ error: 'worker_identity_required' }, 400)
     }
 
+    if (bonds) {
+      const gate = workerBondGate(bonds, workerPubKey)
+      if (!gate.ok) {
+        return c.json(
+          {
+            error: gate.error,
+            minBondSats: gate.minBondSats,
+            note: `Deposit a worker bond of at least ${gate.minBondSats} sats via POST /v1/bonds/deposit with role=worker.`,
+          },
+          403,
+        )
+      }
+    }
+
     // Phase 3 path when escrow meta present
     if (existing.escrow) {
       const action = await runEscrowMethod(
@@ -515,6 +613,7 @@ export function bountyRoutes(
       status: 'claimed',
       workerPubKey,
       workerAccount: workerAccount ?? undefined,
+      claimedAt: existing.claimedAt ?? new Date().toISOString(),
     })
     if (workerAccount != null && accounts) {
       await accounts.bumpStat(workerAccount, 'bountiesClaimed')
@@ -525,10 +624,58 @@ export function bountyRoutes(
     })
   })
 
+  async function recordWorkerVerify(
+    bounty: Bounty,
+    passed: boolean,
+    fraud?: boolean,
+    reason?: string,
+  ) {
+    if (bounty.workerAccount != null && accounts) {
+      await accounts.bumpStat(
+        bounty.workerAccount,
+        passed ? 'verifiesPassed' : 'verifiesFailed',
+      )
+      if (bounty.claimedAt) {
+        const ms = Date.now() - new Date(bounty.claimedAt).getTime()
+        if (Number.isFinite(ms) && ms >= 0) {
+          await accounts.recordSubmitDuration(bounty.workerAccount, ms)
+        }
+      }
+    }
+    if (!passed && fraud && bonds && bounty.workerPubKey) {
+      const slashed = await bonds.slash(
+        bounty.workerPubKey,
+        reason ?? 'fraudulent_submission',
+        'worker',
+      )
+      if (slashed && bounty.workerAccount != null && accounts) {
+        await accounts.bumpStat(bounty.workerAccount, 'slashes')
+      }
+    }
+  }
+
+  async function autoApprove(bountyId: string) {
+    return runEscrowMethod(bountyId, 'approve', {
+      signerPubKey: VERIFIER_PUBKEY,
+      asVerifier: true,
+    })
+  }
+
   app.post('/:id/submit', async (c) => {
     const body = submitSchema.parse(await c.req.json())
     const existing = store.get(c.req.param('id'))
     if (!existing) return c.json({ error: 'not_found' }, 404)
+
+    const workHash =
+      body.workHash ??
+      sha256Hex(body.workUri ?? body.notes ?? existing.id)
+    const milestoneIndex =
+      body.milestoneIndex ?? existing.currentMilestone ?? 0
+    const spec: AcceptanceSpec = existing.milestones?.length
+      ? (existing.milestones[milestoneIndex]?.acceptance ??
+        existing.acceptance ??
+        defaultAcceptance())
+      : (existing.acceptance ?? defaultAcceptance())
 
     if (existing.escrow) {
       const session = sessions
@@ -541,31 +688,168 @@ export function bountyRoutes(
       if (!signer) return c.json({ error: 'worker_identity_required' }, 400)
       const action = await runEscrowMethod(existing.id, 'submit', {
         signerPubKey: signer,
-        workHash: body.workHash,
+        workHash,
         txid: body.submitTxid,
       })
       if ('error' in action && action.error) {
         return c.json(action, action.status ?? 400)
       }
-      const withUri = await store.update(existing.id, {
-        workUri: body.workUri,
-      })
-      return c.json({ ...action, bounty: withUri ?? action.bounty })
+      const afterSubmit = await finishSubmit(
+        existing.id,
+        workHash,
+        body.workUri,
+        body.notes,
+        milestoneIndex,
+        spec,
+        action,
+      )
+      return c.json(afterSubmit)
     }
 
     if (existing.status !== 'claimed' && existing.status !== 'submitted') {
       return c.json({ error: 'invalid_status', status: existing.status }, 409)
     }
-    const updated = await store.update(existing.id, {
+    await store.update(existing.id, {
       status: 'submitted',
-      workHash: body.workHash,
+      workHash,
       workUri: body.workUri,
     })
-    return c.json({
-      bounty: updated,
-      labels: [BRC100_LABELS.app, BRC100_LABELS.submit],
-    })
+    const afterSubmit = await finishSubmit(
+      existing.id,
+      workHash,
+      body.workUri,
+      body.notes,
+      milestoneIndex,
+      spec,
+      {
+        bounty: store.get(existing.id)!,
+        labels: [BRC100_LABELS.app, BRC100_LABELS.submit],
+      },
+    )
+    return c.json(afterSubmit)
   })
+
+  async function finishSubmit(
+    bountyId: string,
+    workHash: string,
+    workUri: string | undefined,
+    notes: string | undefined,
+    milestoneIndex: number,
+    spec: AcceptanceSpec,
+    action: Record<string, unknown> & { bounty?: Bounty },
+  ) {
+    let bounty = store.get(bountyId)!
+    let milestones = bounty.milestones ? [...bounty.milestones] : undefined
+    if (milestones?.[milestoneIndex]) {
+      const m: Milestone = {
+        ...milestones[milestoneIndex]!,
+        status: 'submitted',
+        workHash,
+        workUri,
+      }
+      milestones[milestoneIndex] = m
+    }
+
+    const verification = await runBountyVerifier({
+      bounty,
+      acceptance: spec,
+      workUri,
+      workHash,
+      notes,
+      llm,
+    })
+
+    if (milestones?.[milestoneIndex]) {
+      milestones[milestoneIndex] = {
+        ...milestones[milestoneIndex]!,
+        verification,
+        status: verification.passed ? 'paid' : 'failed',
+      }
+    }
+
+    let releasedSats = bounty.releasedSats ?? 0
+    let currentMilestone = milestoneIndex
+    let autoReleased = false
+    let approveAction: unknown = null
+
+    if (spec.kind !== 'manual') {
+      await recordWorkerVerify(
+        bounty,
+        verification.passed,
+        verification.fraud,
+        verification.reason,
+      )
+    }
+
+    if (verification.passed) {
+      if (milestones?.length) {
+        releasedSats += milestones[milestoneIndex]?.amountSats ?? 0
+        const remaining = milestones.some((m) => m.status !== 'paid')
+        if (!remaining) {
+          const paid = await tryAutoPay(bountyId, bounty)
+          autoReleased = paid.autoReleased
+          approveAction = paid.approveAction
+          bounty = store.get(bountyId) ?? bounty
+        } else {
+          currentMilestone = milestones.findIndex((m) => m.status !== 'paid')
+          if (currentMilestone < 0) currentMilestone = milestoneIndex + 1
+        }
+      } else if (isAutoRelease(spec)) {
+        const paid = await tryAutoPay(bountyId, bounty)
+        autoReleased = paid.autoReleased
+        approveAction = paid.approveAction
+        bounty = store.get(bountyId) ?? bounty
+        if (autoReleased) releasedSats = bounty.amountSats
+      }
+    }
+
+    const updated = await store.update(bountyId, {
+      workUri,
+      workHash,
+      lastVerification: verification,
+      milestones,
+      releasedSats,
+      currentMilestone,
+    })
+    bounty = updated ?? bounty
+
+    return {
+      ...action,
+      bounty,
+      verification,
+      autoReleased,
+      releasedSats,
+      currentMilestone,
+      approve: approveAction,
+      note: autoReleased
+        ? 'Verifier passed; escrow auto-approved.'
+        : spec.kind === 'manual'
+          ? 'Submitted. Poster (or LLM arbiter) must approve.'
+          : verification.passed
+            ? milestones?.some((m) => m.status !== 'paid')
+              ? 'Milestone passed; submit the next slice.'
+              : 'Verified; awaiting poster approve (manual acceptance).'
+            : 'Verification failed; resubmit before the deadline or open a dispute.',
+    }
+  }
+
+  async function tryAutoPay(bountyId: string, bounty: Bounty) {
+    if (bounty.escrow) {
+      const approveAction = await autoApprove(bountyId)
+      if ('error' in approveAction && approveAction.error) {
+        return { autoReleased: false, approveAction }
+      }
+      if (bounty.workerAccount != null && accounts) {
+        await accounts.bumpStat(bounty.workerAccount, 'bountiesCompleted')
+      }
+      return { autoReleased: true, approveAction }
+    }
+    await store.update(bountyId, { status: 'paid' })
+    if (bounty.workerAccount != null && accounts) {
+      await accounts.bumpStat(bounty.workerAccount, 'bountiesCompleted')
+    }
+    return { autoReleased: true, approveAction: null }
+  }
 
   app.post('/:id/settle', async (c) => {
     const body = settleSchema.parse(await c.req.json())
@@ -625,6 +909,18 @@ export function bountyRoutes(
       ) {
         await accounts.bumpStat(existing.workerAccount, 'bountiesCompleted')
       }
+      if (
+        body.outcome === 'refunded' &&
+        existing.status !== 'open' &&
+        bonds &&
+        existing.workerPubKey
+      ) {
+        await slashWorker(
+          existing.workerPubKey,
+          existing.workerAccount,
+          'no_submit_by_deadline',
+        )
+      }
       return c.json(action)
     }
 
@@ -646,6 +942,128 @@ export function bountyRoutes(
       bounty: updated,
       labels: [BRC100_LABELS.app, BRC100_LABELS.settle],
     })
+  })
+
+  async function slashWorker(
+    controllerKey: string,
+    accountNumber: number | undefined,
+    reason: string,
+  ) {
+    if (!bonds) return
+    const slashed = await bonds.slash(controllerKey, reason, 'worker')
+    if (slashed && accountNumber != null && accounts) {
+      await accounts.bumpStat(accountNumber, 'slashes')
+    }
+  }
+
+  async function slashPoster(
+    controllerKey: string | undefined,
+    accountNumber: number | undefined,
+    reason: string,
+  ) {
+    if (!bonds || !controllerKey) return
+    const slashed = await bonds.slash(controllerKey, reason, 'poster')
+    if (slashed && accountNumber != null && accounts) {
+      await accounts.bumpStat(accountNumber, 'slashes')
+    }
+  }
+
+  app.post('/:id/dispute', async (c) => {
+    const body = z
+      .object({
+        reason: z.string().max(2000).optional(),
+        payWorker: z.boolean().optional(),
+      })
+      .parse((await c.req.json().catch(() => ({}))) as object)
+    const existing = store.get(c.req.param('id'))
+    if (!existing) return c.json({ error: 'not_found' }, 404)
+    if (!['claimed', 'submitted'].includes(existing.status)) {
+      return c.json({ error: 'invalid_status', status: existing.status }, 409)
+    }
+
+    const mode = existing.arbiterMode ?? (existing.escrow?.arbiterPubKey === LLM_ARBITER_PUBKEY ? 'llm' : existing.escrow?.arbiterPubKey ? 'pubkey' : 'none')
+
+    if (mode === 'llm') {
+      if (!llm) return c.json({ error: 'llm_unavailable' }, 503)
+      const judged = await runLlmArbiter({
+        bounty: existing,
+        reason: body.reason,
+        llm,
+      })
+      const payWorker = judged.pass
+      let action: Awaited<ReturnType<typeof runEscrowMethod>> | { bounty: Bounty }
+      if (existing.escrow) {
+        action = await runEscrowMethod(existing.id, 'resolve', {
+          signerPubKey: LLM_ARBITER_PUBKEY,
+          payWorker,
+        })
+        if ('error' in action && action.error) {
+          return c.json({ ...action, judged }, action.status ?? 400)
+        }
+      } else {
+        const updated = await store.update(existing.id, {
+          status: payWorker ? 'paid' : 'refunded',
+        })
+        action = { bounty: updated! }
+      }
+      if (payWorker) {
+        await slashPoster(
+          existing.posterPubKey,
+          existing.posterAccount,
+          `llm_arbiter_worker ${judged.reason}`.slice(0, 500),
+        )
+        if (existing.workerAccount != null && accounts) {
+          await accounts.bumpStat(existing.workerAccount, 'bountiesCompleted')
+        }
+      } else {
+        await slashWorker(
+          existing.workerPubKey ?? '',
+          existing.workerAccount,
+          `llm_arbiter_poster ${judged.reason}`.slice(0, 500),
+        )
+      }
+      return c.json({
+        ...action,
+        judged,
+        arbiter: 'llm',
+        note: payWorker
+          ? 'LLM arbiter paid the worker; poster bond slashed if active.'
+          : 'LLM arbiter refunded the poster; worker bond slashed if active.',
+      })
+    }
+
+    if (mode === 'pubkey' && existing.escrow) {
+      if (body.payWorker === undefined) {
+        return c.json(
+          {
+            error: 'pubkey_arbiter',
+            note: 'Call POST /v1/bounties/:id/escrow/resolve with arbiter signerPubKey and payWorker.',
+          },
+          400,
+        )
+      }
+      const session = sessions
+        ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+        : undefined
+      const signer =
+        session?.controllerKey ?? existing.escrow.arbiterPubKey
+      const action = await runEscrowMethod(existing.id, 'resolve', {
+        signerPubKey: signer,
+        payWorker: body.payWorker,
+      })
+      if ('error' in action && action.error) {
+        return c.json(action, action.status ?? 400)
+      }
+      return c.json(action)
+    }
+
+    return c.json(
+      {
+        error: 'no_arbiter',
+        note: 'Create the bounty with arbiter: "llm" or an arbiterPubKey to dispute.',
+      },
+      400,
+    )
   })
 
   // Explicit escrow methods (Phase 3)
@@ -677,6 +1095,17 @@ export function bountyRoutes(
         accounts
       ) {
         await accounts.bumpStat(action.bounty.workerAccount, 'bountiesCompleted')
+      }
+      if (
+        method === 'refund' &&
+        action.bounty?.workerPubKey &&
+        bonds
+      ) {
+        await slashWorker(
+          action.bounty.workerPubKey,
+          action.bounty.workerAccount,
+          'no_submit_by_deadline',
+        )
       }
       return c.json(action)
     })

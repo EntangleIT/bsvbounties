@@ -61,6 +61,22 @@ export function createBounty(body: {
   useEscrow?: boolean
   deadline?: number
   arbiterPubKey?: string
+  arbiter?: 'llm' | string
+  acceptance?: {
+    kind: string
+    url?: string
+    jsonPath?: string
+    expect?: string | number | boolean
+    expectStatus?: number
+    regex?: string
+    schema?: Record<string, unknown>
+    rubric?: string
+  }
+  milestones?: Array<{
+    title?: string
+    amountSats: number
+    acceptance: { kind: string; jsonPath?: string; expect?: unknown }
+  }>
 }): Promise<{
   bounty: Bounty
   createActionTemplate: {
@@ -86,10 +102,22 @@ export function claimBounty(
   })
 }
 
-export function submitWork(id: string, workHash: string, workUri?: string) {
+export function submitWork(
+  id: string,
+  workHash: string | undefined,
+  workUri?: string,
+  notes?: string,
+) {
   return request(`/v1/bounties/${id}/submit`, {
     method: 'POST',
-    body: JSON.stringify({ workHash, workUri }),
+    body: JSON.stringify({ workHash, workUri, notes }),
+  })
+}
+
+export function disputeBounty(id: string, reason?: string) {
+  return request(`/v1/bounties/${id}/dispute`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
   })
 }
 
@@ -213,7 +241,14 @@ export function buyAccount(number: number, buyerControllerKey: string) {
 
 export function updateProfile(
   number: number,
-  body: { displayName?: string; bio?: string },
+  body: {
+    displayName?: string
+    bio?: string
+    skills?: string[]
+    capabilities?: string[]
+    callback?: string
+    kind?: 'human' | 'agent'
+  },
 ) {
   return request<Account>(`/v1/accounts/${number}/profile`, {
     method: 'PATCH',

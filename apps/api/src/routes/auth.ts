@@ -41,7 +41,7 @@ export function authRoutes(
     const body = z
       .object({ controllerKey: z.string().min(4) })
       .parse(await c.req.json())
-    const issued = challenges.issue(body.controllerKey)
+    const issued = await challenges.issue(body.controllerKey)
     return c.json({
       challenge: issued.challenge,
       message: authMessage(issued.challenge),
@@ -62,7 +62,7 @@ export function authRoutes(
       })
       .parse(await c.req.json())
 
-    if (!challenges.consume(body.controllerKey, body.challenge)) {
+    if (!(await challenges.consume(body.controllerKey, body.challenge))) {
       return c.json({ error: 'invalid_challenge' }, 401)
     }
 

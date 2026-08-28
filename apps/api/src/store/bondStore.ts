@@ -1,52 +1,56 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import path from 'node:path'
-import type { Network, PosterBond } from '@ai-bounties/shared'
+import type { BondRole, Network, PosterBond } from '@ai-bounties/shared'
+import { bondRoleOf } from '@ai-bounties/shared'
+import { persistFrom, type JsonPersist } from './persist.js'
 
 interface StoreFile {
   bonds: PosterBond[]
 }
 
 export class BondStore {
-  private filePath: string
+  private backend: JsonPersist
   private bonds: PosterBond[] = []
-  private loaded = false
 
-  constructor(dataDir: string) {
-    this.filePath = path.join(dataDir, 'bonds.json')
+  constructor(dataDirOrPersist: string | JsonPersist) {
+    this.backend = persistFrom(dataDirOrPersist, 'bonds.json')
   }
 
   async init(): Promise<void> {
-    if (this.loaded) return
-    await mkdir(path.dirname(this.filePath), { recursive: true })
+    const raw = await this.backend.read()
+    if (!raw) {
+      this.bonds = []
+      return
+    }
     try {
-      const raw = await readFile(this.filePath, 'utf8')
       const parsed = JSON.parse(raw) as StoreFile
       this.bonds = parsed.bonds ?? []
     } catch {
       this.bonds = []
-      await this.persist()
     }
-    this.loaded = true
   }
 
   private async persist(): Promise<void> {
-    await writeFile(
-      this.filePath,
-      JSON.stringify({ bonds: this.bonds }, null, 2),
-      'utf8',
-    )
+    await this.backend.write(JSON.stringify({ bonds: this.bonds }, null, 2))
   }
 
-  getActive(controllerKey: string): PosterBond | undefined {
+  getActive(
+    controllerKey: string,
+    role: BondRole = 'poster',
+  ): PosterBond | undefined {
     return this.bonds.find(
-      (b) => b.controllerKey === controllerKey && b.status === 'active',
+      (b) =>
+        b.controllerKey === controllerKey &&
+        b.status === 'active' &&
+        bondRoleOf(b) === role,
     )
   }
 
-  list(controllerKey?: string): PosterBond[] {
+  list(controllerKey?: string, role?: BondRole): PosterBond[] {
     let rows = [...this.bonds]
     if (controllerKey) {
       rows = rows.filter((b) => b.controllerKey === controllerKey)
+    }
+    if (role) {
+      rows = rows.filter((b) => bondRoleOf(b) === role)
     }
     return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   }
@@ -61,11 +65,12 @@ export class BondStore {
     accountNumber?: number
     depositTxid?: string
     network: Network
+    role?: BondRole
   }): Promise<PosterBond> {
-    const existing = this.getActive(opts.controllerKey)
+    const role = opts.role ?? 'poster'
+    const existing = this.getActive(opts.controllerKey, role)
     const now = new Date().toISOString()
     if (existing) {
-      // Top up
       const next: PosterBond = {
         ...existing,
         amountSats: existing.amountSats + opts.amountSats,
@@ -75,7 +80,9 @@ export class BondStore {
       }
       const idx = this.bonds.findIndex(
         (b) =>
-          b.controllerKey === opts.controllerKey && b.status === 'active',
+          b.controllerKey === opts.controllerKey &&
+          b.status === 'active' &&
+          bondRoleOf(b) === role,
       )
       this.bonds[idx] = next
       await this.persist()
@@ -87,6 +94,7 @@ export class BondStore {
       accountNumber: opts.accountNumber,
       amountSats: opts.amountSats,
       status: 'active',
+      role,
       depositTxid: opts.depositTxid,
       createdAt: now,
       updatedAt: now,
@@ -97,8 +105,12 @@ export class BondStore {
     return bond
   }
 
-  async release(controllerKey: string, releaseTxid?: string): Promise<PosterBond | undefined> {
-    const b = this.getActive(controllerKey)
+  async release(
+    controllerKey: string,
+    releaseTxid?: string,
+    role: BondRole = 'poster',
+  ): Promise<PosterBond | undefined> {
+    const b = this.getActive(controllerKey, role)
     if (!b) return undefined
     const next: PosterBond = {
       ...b,
@@ -116,8 +128,9 @@ export class BondStore {
   async slash(
     controllerKey: string,
     reason: string,
+    role: BondRole = 'poster',
   ): Promise<PosterBond | undefined> {
-    const b = this.getActive(controllerKey)
+    const b = this.getActive(controllerKey, role)
     if (!b) return undefined
     const next: PosterBond = {
       ...b,
@@ -134,8 +147,12 @@ export class BondStore {
   /**
    * True if controller has active bond >= minSats (0 = any active bond).
    */
-  meetsMinimum(controllerKey: string, minSats: number): boolean {
-    const b = this.getActive(controllerKey)
+  meetsMinimum(
+    controllerKey: string,
+    minSats: number,
+    role: BondRole = 'poster',
+  ): boolean {
+    const b = this.getActive(controllerKey, role)
     if (!b) return false
     if (minSats <= 0) return true
     return b.amountSats >= minSats

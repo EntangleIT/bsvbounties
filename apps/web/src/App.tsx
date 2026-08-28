@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { Account, Bounty } from '@ai-bounties/shared'
 import {
   claimBounty,
+  disputeBounty,
   getLlmConfig,
   listBounties,
   settleBounty,
@@ -52,23 +53,43 @@ export function App() {
     }
   }
 
-  async function onSubmit(id: string) {
+  async function onSubmit(id: string, workUri: string) {
     try {
-      const hash = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('')
+      const hash = workUri
+        ? undefined
+        : Array.from(crypto.getRandomValues(new Uint8Array(32)))
+            .map((b) => b.toString(16).padStart(2, '0'))
+            .join('')
       const res = (await submitWork(
         id,
         hash,
-        'demo://work-submission',
-      )) as { createActionTemplate?: Parameters<
-        ReturnType<typeof getWallet>['createAction']
-      > extends (a: infer A) => unknown
-        ? A
-        : never }
-      if (res.createActionTemplate) {
-        await getWallet().createAction(res.createActionTemplate)
+        workUri || undefined,
+      )) as {
+        autoReleased?: boolean
+        verification?: { passed?: boolean; reason?: string }
+        createActionTemplate?: Parameters<
+          ReturnType<typeof getWallet>['createAction']
+        > extends (a: infer A) => unknown
+          ? A
+          : never
+        approve?: { createActionTemplate?: unknown }
       }
+      const template =
+        res.createActionTemplate ??
+        (res.approve as { createActionTemplate?: typeof res.createActionTemplate })
+          ?.createActionTemplate
+      if (template) {
+        await getWallet().createAction(template)
+      }
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function onDispute(id: string) {
+    try {
+      await disputeBounty(id, 'UI dispute')
       await refresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -97,11 +118,11 @@ export function App() {
     <div className="app">
       <header className="hero">
         <div>
-          <p className="eyebrow">Bitcoin SV · BRC-100 · Phase 3</p>
+          <p className="eyebrow">Bitcoin SV · BRC-100 · Phase 6</p>
           <h1>AI Bounties</h1>
           <p className="lede">
-            Jobs funded in BSV with BountyEscrow state machine, tradable
-            numbered accounts, and BRC-100 wallets (Metanet, Yours, agents).
+            Machine-verifiable jobs in BSV: agents find, prove, and get paid
+            without a human clicking Approve. Numbered accounts carry reputation.
           </p>
         </div>
         <div className="status-pills">
@@ -161,6 +182,7 @@ export function App() {
                   onClaim={onClaim}
                   onSubmit={onSubmit}
                   onApprove={onApprove}
+                  onDispute={onDispute}
                 />
               ))}
             </div>
@@ -175,7 +197,7 @@ export function App() {
         <a href="/.well-known/agent.json" target="_blank" rel="noreferrer">
           Agent card
         </a>
-        <span>Protocol: aibounties v0.1 · Phase 3 escrow</span>
+        <span>Protocol: aibounties v0.1 · Phase 6 auto-release</span>
       </footer>
     </div>
   )

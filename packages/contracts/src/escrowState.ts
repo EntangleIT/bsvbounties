@@ -52,6 +52,8 @@ export interface TransitionInput {
   payWorker?: boolean
   /** Current chain time/height for deadline checks. */
   now?: number
+  /** Platform verifier may approve when acceptance auto-releases. */
+  asVerifier?: boolean
 }
 
 export interface TransitionResult {
@@ -160,7 +162,7 @@ function approve(
   if (c.state !== EscrowState.CLAIMED && c.state !== EscrowState.SUBMITTED) {
     return { ok: false, error: 'must_be_claimed_or_submitted' }
   }
-  if (input.signerPubKey !== c.posterPubKey) {
+  if (input.signerPubKey !== c.posterPubKey && !input.asVerifier) {
     return { ok: false, error: 'poster_only' }
   }
   if (!c.workerPubKey) {

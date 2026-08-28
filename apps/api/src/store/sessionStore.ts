@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import path from 'node:path'
+import { persistFrom, type JsonPersist } from './persist.js'
 
 export interface Session {
   token: string
@@ -14,38 +13,39 @@ interface StoreFile {
   sessions: Session[]
 }
 
+interface ChallengeFile {
+  items: Record<string, { challenge: string; expires: number }>
+}
+
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 export class SessionStore {
-  private filePath: string
+  private backend: JsonPersist
   private sessions: Session[] = []
-  private loaded = false
 
-  constructor(dataDir: string) {
-    this.filePath = path.join(dataDir, 'sessions.json')
+  constructor(dataDirOrPersist: string | JsonPersist) {
+    this.backend = persistFrom(dataDirOrPersist, 'sessions.json')
   }
 
   async init(): Promise<void> {
-    if (this.loaded) return
-    await mkdir(path.dirname(this.filePath), { recursive: true })
+    const raw = await this.backend.read()
+    if (!raw) {
+      this.sessions = []
+      return
+    }
     try {
-      const raw = await readFile(this.filePath, 'utf8')
       const parsed = JSON.parse(raw) as StoreFile
       this.sessions = (parsed.sessions ?? []).filter(
         (s) => new Date(s.expiresAt).getTime() > Date.now(),
       )
     } catch {
       this.sessions = []
-      await this.persist()
     }
-    this.loaded = true
   }
 
   private async persist(): Promise<void> {
-    await writeFile(
-      this.filePath,
+    await this.backend.write(
       JSON.stringify({ sessions: this.sessions }, null, 2),
-      'utf8',
     )
   }
 
@@ -59,7 +59,6 @@ export class SessionStore {
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + SESSION_TTL_MS).toISOString(),
     }
-    // Drop other sessions for same controller+account
     this.sessions = this.sessions.filter(
       (s) =>
         !(
@@ -75,10 +74,7 @@ export class SessionStore {
   get(token: string): Session | undefined {
     const s = this.sessions.find((x) => x.token === token)
     if (!s) return undefined
-    if (new Date(s.expiresAt).getTime() <= Date.now()) {
-      void this.revoke(token)
-      return undefined
-    }
+    if (new Date(s.expiresAt).getTime() <= Date.now()) return undefined
     return s
   }
 
@@ -106,32 +102,64 @@ export class SessionStore {
   }
 }
 
-/** In-memory challenges (short-lived). */
+/** Short-lived login challenges. Optional persist so Cloudflare isolates share them. */
 export class ChallengeStore {
+  private backend?: JsonPersist
   private map = new Map<string, { challenge: string; expires: number }>()
 
-  issue(controllerKey: string): { challenge: string; expiresAt: string } {
+  constructor(persist?: JsonPersist) {
+    this.backend = persist
+  }
+
+  async init(): Promise<void> {
+    if (!this.backend) return
+    const raw = await this.backend.read()
+    this.map.clear()
+    if (!raw) return
+    try {
+      const parsed = JSON.parse(raw) as ChallengeFile
+      const now = Date.now()
+      for (const [key, row] of Object.entries(parsed.items ?? {})) {
+        if (row.expires > now) this.map.set(key, row)
+      }
+    } catch {
+      /* empty */
+    }
+  }
+
+  private async persist(): Promise<void> {
+    if (!this.backend) return
+    const items = Object.fromEntries(this.map)
+    await this.backend.write(JSON.stringify({ items }))
+  }
+
+  async issue(
+    controllerKey: string,
+  ): Promise<{ challenge: string; expiresAt: string }> {
     const challenge = randomBytes(24).toString('hex')
     const expires = Date.now() + 5 * 60 * 1000
     this.map.set(controllerKey, { challenge, expires })
-    // prune occasionally
     if (this.map.size > 500) {
+      const now = Date.now()
       for (const [k, v] of this.map) {
-        if (v.expires < Date.now()) this.map.delete(k)
+        if (v.expires < now) this.map.delete(k)
       }
     }
+    await this.persist()
     return { challenge, expiresAt: new Date(expires).toISOString() }
   }
 
-  consume(controllerKey: string, challenge: string): boolean {
+  async consume(controllerKey: string, challenge: string): Promise<boolean> {
     const row = this.map.get(controllerKey)
     if (!row) return false
     if (row.expires < Date.now()) {
       this.map.delete(controllerKey)
+      await this.persist()
       return false
     }
     if (row.challenge !== challenge) return false
     this.map.delete(controllerKey)
+    await this.persist()
     return true
   }
 }

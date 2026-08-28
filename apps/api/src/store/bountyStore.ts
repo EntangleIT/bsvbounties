@@ -1,39 +1,35 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import path from 'node:path'
 import type { Bounty, BountyStatus, ListBountiesQuery } from '@ai-bounties/shared'
+import { persistFrom, type JsonPersist } from './persist.js'
 
 interface StoreFile {
   bounties: Bounty[]
 }
 
 export class BountyStore {
-  private filePath: string
+  private backend: JsonPersist
   private bounties: Bounty[] = []
-  private loaded = false
 
-  constructor(dataDir: string) {
-    this.filePath = path.join(dataDir, 'bounties.json')
+  constructor(dataDirOrPersist: string | JsonPersist) {
+    this.backend = persistFrom(dataDirOrPersist, 'bounties.json')
   }
 
   async init(): Promise<void> {
-    if (this.loaded) return
-    await mkdir(path.dirname(this.filePath), { recursive: true })
+    const raw = await this.backend.read()
+    if (!raw) {
+      this.bounties = []
+      return
+    }
     try {
-      const raw = await readFile(this.filePath, 'utf8')
       const parsed = JSON.parse(raw) as StoreFile
       this.bounties = parsed.bounties ?? []
     } catch {
       this.bounties = []
-      await this.persist()
     }
-    this.loaded = true
   }
 
   private async persist(): Promise<void> {
-    await writeFile(
-      this.filePath,
+    await this.backend.write(
       JSON.stringify({ bounties: this.bounties }, null, 2),
-      'utf8',
     )
   }
 

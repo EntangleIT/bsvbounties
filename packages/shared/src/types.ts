@@ -1,3 +1,19 @@
+import type {
+  AcceptanceSpec,
+  ArbiterMode,
+  Milestone,
+  MilestoneInput,
+  Verification,
+} from './acceptance.js'
+
+export type {
+  AcceptanceSpec,
+  Verification,
+  Milestone,
+  MilestoneInput,
+  ArbiterMode,
+} from './acceptance.js'
+
 /** Protocol version byte (v0.1). */
 export const PROTOCOL_VERSION = 0x01
 
@@ -9,6 +25,8 @@ export enum BountyAction {
   CLAIM = 0x02,
   SUBMIT = 0x03,
   SETTLE = 0x04,
+  MILESTONE = 0x05,
+  DISPUTE = 0x06,
 }
 
 export enum BountyCategory {
@@ -36,6 +54,8 @@ export interface BountyContent {
   description: string
   category: keyof typeof BountyCategory | string
   requirements?: string[]
+  acceptance?: AcceptanceSpec
+  milestones?: MilestoneInput[]
 }
 
 /** Escrow funding mode (Phase 3). */
@@ -76,6 +96,14 @@ export interface Bounty {
   workUri?: string
   /** Phase 3 escrow covenant metadata */
   escrow?: BountyEscrowMeta
+  /** Machine-checkable acceptance (default manual). */
+  acceptance?: AcceptanceSpec
+  arbiterMode?: ArbiterMode
+  milestones?: Milestone[]
+  currentMilestone?: number
+  releasedSats?: number
+  lastVerification?: Verification
+  claimedAt?: string
   createdAt: string
   updatedAt: string
   network: Network
@@ -92,6 +120,9 @@ export interface CreateBountyInput {
   /** Optional: if already broadcast, register existing tx */
   escrowTxid?: string
   network?: Network
+  acceptance?: AcceptanceSpec
+  arbiter?: 'llm' | string
+  milestones?: MilestoneInput[]
 }
 
 export interface ClaimBountyInput {
@@ -101,10 +132,11 @@ export interface ClaimBountyInput {
 }
 
 export interface SubmitWorkInput {
-  workHash: string
+  workHash?: string
   workUri?: string
   notes?: string
   submitTxid?: string
+  milestoneIndex?: number
 }
 
 export interface SettleBountyInput {

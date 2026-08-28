@@ -29,7 +29,8 @@ BSV_TESTNET_WIF=<your-testnet-wif>
 ## Fund a testnet wallet
 
 1. Generate or use an existing WIF (Panda / Yours / scrypt TestWallet).
-2. Request coins from a faucet:
+2. Request coins from a faucet (availability varies):
+   - https://bsvfaucet.com/ (sign-in required)
    - https://scrypt.io/faucet
    - https://witnessonchain.com/faucet/tbsv
    - https://testnet.help/en/bsvfaucet/testnet

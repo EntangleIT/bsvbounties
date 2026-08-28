@@ -10,3 +10,7 @@ data/*.json
 coverage/
 .vite/
 *.tsbuildinfo
+.wrangler/
+.dev.vars
+ASLTutor/
+worker-configuration.d.ts

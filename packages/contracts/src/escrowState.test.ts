@@ -103,6 +103,47 @@ describe('BountyEscrow state machine', () => {
     assert.equal(r.next.state, EscrowState.PAID)
   })
 
+  it('verifier can auto-approve submitted work', () => {
+    let s = base()
+    const c = applyTransition(s, {
+      method: 'claim',
+      signerPubKey: '02worker',
+    })
+    assert.ok(c.ok)
+    if (!c.ok) return
+    s = c.next
+    const sub = applyTransition(s, {
+      method: 'submit',
+      signerPubKey: '02worker',
+      workHash: 'ab'.repeat(32),
+    })
+    assert.ok(sub.ok)
+    if (!sub.ok) return
+    const r = applyTransition(sub.next, {
+      method: 'approve',
+      signerPubKey: 'ai-bounties-verifier-v1',
+      asVerifier: true,
+    })
+    assert.equal(r.ok, true)
+    if (!r.ok) return
+    assert.equal(r.next.state, EscrowState.PAID)
+  })
+
+  it('non-poster cannot approve without asVerifier', () => {
+    let s = base()
+    const c = applyTransition(s, {
+      method: 'claim',
+      signerPubKey: '02worker',
+    })
+    assert.ok(c.ok)
+    if (!c.ok) return
+    const r = applyTransition(c.next, {
+      method: 'approve',
+      signerPubKey: '02worker',
+    })
+    assert.equal(r.ok, false)
+  })
+
   it('feeAmount calc', () => {
     assert.equal(feeAmount(100_000, 200), 2_000)
     assert.equal(feeAmount(100_000, 0), 0)

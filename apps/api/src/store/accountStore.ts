@@ -1,11 +1,12 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import path from 'node:path'
 import type {
   Account,
   AccountKind,
+  AccountStats,
   ListAccountsQuery,
   Network,
 } from '@ai-bounties/shared'
+import { EMPTY_ACCOUNT_STATS, normalizeAccount } from '@ai-bounties/shared'
+import { persistFrom, type JsonPersist } from './persist.js'
 
 interface StoreFile {
   nextNumber: number
@@ -13,29 +14,29 @@ interface StoreFile {
 }
 
 export class AccountStore {
-  private filePath: string
+  private backend: JsonPersist
   private nextNumber = 1
   private accounts: Account[] = []
-  private loaded = false
 
-  constructor(dataDir: string) {
-    this.filePath = path.join(dataDir, 'accounts.json')
+  constructor(dataDirOrPersist: string | JsonPersist) {
+    this.backend = persistFrom(dataDirOrPersist, 'accounts.json')
   }
 
   async init(): Promise<void> {
-    if (this.loaded) return
-    await mkdir(path.dirname(this.filePath), { recursive: true })
+    const raw = await this.backend.read()
+    if (!raw) {
+      this.accounts = []
+      this.nextNumber = 1
+      return
+    }
     try {
-      const raw = await readFile(this.filePath, 'utf8')
       const parsed = JSON.parse(raw) as StoreFile
       this.accounts = parsed.accounts ?? []
       this.nextNumber = parsed.nextNumber ?? this.computeNext()
     } catch {
       this.accounts = []
       this.nextNumber = 1
-      await this.persist()
     }
-    this.loaded = true
   }
 
   private computeNext(): number {
@@ -44,14 +45,12 @@ export class AccountStore {
   }
 
   private async persist(): Promise<void> {
-    await writeFile(
-      this.filePath,
+    await this.backend.write(
       JSON.stringify(
         { nextNumber: this.nextNumber, accounts: this.accounts },
         null,
         2,
       ),
-      'utf8',
     )
   }
 
@@ -66,11 +65,14 @@ export class AccountStore {
   }
 
   getByNumber(n: number): Account | undefined {
-    return this.accounts.find((a) => a.number === n)
+    const a = this.accounts.find((row) => row.number === n)
+    return a ? normalizeAccount(a) : undefined
   }
 
   getByController(controllerKey: string): Account[] {
-    return this.accounts.filter((a) => a.controllerKey === controllerKey)
+    return this.accounts
+      .filter((a) => a.controllerKey === controllerKey)
+      .map(normalizeAccount)
   }
 
   isNumberTaken(n: number): boolean {
@@ -86,6 +88,7 @@ export class AccountStore {
     if (query.controllerKey) {
       rows = rows.filter((a) => a.controllerKey === query.controllerKey)
     }
+    rows = rows.map(normalizeAccount)
     rows.sort((a, b) => a.number - b.number)
     const offset = query.offset ?? 0
     const limit = query.limit ?? 100
@@ -100,6 +103,9 @@ export class AccountStore {
     preferredNumber?: number
     mintTxid?: string
     network: Network
+    skills?: string[]
+    capabilities?: string[]
+    callback?: string
   }): Promise<Account> {
     let number: number
     if (opts.preferredNumber != null) {
@@ -128,11 +134,10 @@ export class AccountStore {
       createdAt: now,
       updatedAt: now,
       network: opts.network,
-      stats: {
-        bountiesPosted: 0,
-        bountiesCompleted: 0,
-        bountiesClaimed: 0,
-      },
+      skills: opts.skills ?? [],
+      capabilities: opts.capabilities ?? [],
+      callback: opts.callback,
+      stats: { ...EMPTY_ACCOUNT_STATS },
     }
     this.accounts.push(account)
     await this.persist()
@@ -171,13 +176,22 @@ export class AccountStore {
 
   async bumpStat(
     number: number,
-    stat: keyof Account['stats'],
+    stat: Exclude<keyof AccountStats, 'submitDurationsMs'>,
     delta = 1,
   ): Promise<void> {
     const a = this.getByNumber(number)
     if (!a) return
     await this.update(number, {
       stats: { ...a.stats, [stat]: a.stats[stat] + delta },
+    })
+  }
+
+  async recordSubmitDuration(number: number, durationMs: number): Promise<void> {
+    const a = this.getByNumber(number)
+    if (!a) return
+    const next = [...a.stats.submitDurationsMs, durationMs].slice(-32)
+    await this.update(number, {
+      stats: { ...a.stats, submitDurationsMs: next },
     })
   }
 }

@@ -27,6 +27,7 @@ export function AccountPanel({
 }) {
   const [displayName, setDisplayName] = useState('')
   const [bio, setBio] = useState('')
+  const [skills, setSkills] = useState('')
   const [preferred, setPreferred] = useState('')
   const [listPrice, setListPrice] = useState(10_000_000)
   const [transferTo, setTransferTo] = useState('')
@@ -51,6 +52,7 @@ export function AccountPanel({
     if (account) {
       setDisplayName(account.displayName)
       setBio(account.bio)
+      setSkills((account.skills ?? []).join(', '))
     }
   }, [account])
 
@@ -152,6 +154,10 @@ export function AccountPanel({
       const updated = await updateProfile(account.number, {
         displayName,
         bio,
+        skills: skills
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
       })
       onAccountChange(updated)
       setMsg('Profile saved')
@@ -247,6 +253,12 @@ export function AccountPanel({
               {account.kind} · posted {account.stats.bountiesPosted} · claimed{' '}
               {account.stats.bountiesClaimed} · done{' '}
               {account.stats.bountiesCompleted}
+              {account.stats.verifiesPassed + account.stats.verifiesFailed > 0 &&
+                ` · verify ${(
+                  (100 * account.stats.verifiesPassed) /
+                  (account.stats.verifiesPassed + account.stats.verifiesFailed)
+                ).toFixed(0)}%`}
+              {account.stats.slashes > 0 && ` · slashes ${account.stats.slashes}`}
             </div>
             {account.listPriceSats != null && account.listPriceSats > 0 && (
               <div className="listed">
@@ -314,6 +326,14 @@ export function AccountPanel({
               rows={2}
               value={bio}
               onChange={(e) => setBio(e.target.value)}
+            />
+          </label>
+          <label>
+            Skills (comma-separated)
+            <input
+              value={skills}
+              onChange={(e) => setSkills(e.target.value)}
+              placeholder="http, typescript, research"
             />
           </label>
           <button

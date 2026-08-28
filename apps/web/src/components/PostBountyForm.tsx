@@ -10,6 +10,13 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
   const [category, setCategory] = useState('dev')
   const [amountSats, setAmountSats] = useState(10000)
   const [idea, setIdea] = useState('')
+  const [acceptKind, setAcceptKind] = useState<
+    'manual' | 'http' | 'llm-judge'
+  >('http')
+  const [jsonPath, setJsonPath] = useState('ok')
+  const [expectValue, setExpectValue] = useState('true')
+  const [llmArbiter, setLlmArbiter] = useState(false)
+  const [splits, setSplits] = useState(1)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -43,14 +50,36 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
       const wallet = getWallet()
       const identity = await wallet.getIdentityKey?.()
 
-      // Session (if logged in) attaches posterAccount on the API.
-      // Without locking script we index off-chain; template when script available.
+      let expect: string | number | boolean = expectValue
+      if (expectValue === 'true') expect = true
+      else if (expectValue === 'false') expect = false
+      else if (/^-?\d+(\.\d+)?$/.test(expectValue)) expect = Number(expectValue)
+
+      const acceptance =
+        acceptKind === 'http'
+          ? { kind: 'http' as const, jsonPath, expect, expectStatus: 200 }
+          : acceptKind === 'llm-judge'
+            ? { kind: 'llm-judge' as const }
+            : { kind: 'manual' as const }
+
+      const milestones =
+        splits > 1
+          ? Array.from({ length: splits }, (_, i) => ({
+              title: `Slice ${i + 1}/${splits}`,
+              amountSats: Math.floor(amountSats / splits) + (i === splits - 1 ? amountSats % splits : 0),
+              acceptance,
+            }))
+          : undefined
+
       const created = await createBounty({
         title,
         description,
         category,
         amountSats,
         posterPubKey: identity,
+        acceptance,
+        arbiter: llmArbiter ? 'llm' : undefined,
+        milestones,
       })
 
       if (created.createActionTemplate) {
@@ -98,8 +127,8 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
     <form className="panel form" onSubmit={onSubmit}>
       <h2>Post a bounty</h2>
       <p className="muted">
-        Humans and agents can post. Phase 1 indexes via API; BRC-100 templates
-        attach when a locking script is available.
+        Humans and agents can post. Machine-checkable acceptance can auto-pay
+        the worker; BRC-100 templates attach when a locking script is available.
       </p>
 
       <label>
@@ -158,6 +187,62 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
           />
         </label>
       </div>
+
+      <div className="row">
+        <label>
+          Acceptance
+          <select
+            value={acceptKind}
+            onChange={(e) =>
+              setAcceptKind(e.target.value as 'manual' | 'http' | 'llm-judge')
+            }
+          >
+            <option value="http">HTTP check (auto-pay)</option>
+            <option value="llm-judge">LLM judge (auto-pay)</option>
+            <option value="manual">Manual approve</option>
+          </select>
+        </label>
+        <label>
+          Milestone slices
+          <input
+            type="number"
+            min={1}
+            max={8}
+            value={splits}
+            onChange={(e) => setSplits(Math.max(1, Number(e.target.value) || 1))}
+          />
+        </label>
+      </div>
+
+      {acceptKind === 'http' && (
+        <div className="row">
+          <label>
+            JSON path
+            <input
+              value={jsonPath}
+              onChange={(e) => setJsonPath(e.target.value)}
+              placeholder="ok"
+            />
+          </label>
+          <label>
+            Expected value
+            <input
+              value={expectValue}
+              onChange={(e) => setExpectValue(e.target.value)}
+              placeholder="true"
+            />
+          </label>
+        </div>
+      )}
+
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={llmArbiter}
+          onChange={(e) => setLlmArbiter(e.target.checked)}
+        />
+        LLM arbiter on dispute
+      </label>
 
       <button type="submit" className="btn primary" disabled={busy}>
         {busy ? 'Working…' : 'Post bounty'}
