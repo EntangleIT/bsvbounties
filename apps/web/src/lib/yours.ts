@@ -99,7 +99,9 @@ export function syncFromProvider(input: {
     } else if (input.status === 'detecting') {
       status = status === 'connected' ? 'available' : 'detecting'
     } else {
-      status = input.hasProviders ? 'available' : 'missing'
+      // Idle `disconnected` means "not connected yet", not "extension missing".
+      // @1sat/connect auto-detects Yours via CWI; window.yours is legacy.
+      status = 'available'
     }
   }
   emit()

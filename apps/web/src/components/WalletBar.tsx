@@ -1,13 +1,5 @@
-import { useEffect, useState } from 'react'
-import {
-  YOURS_CHROME,
-  YOURS_SITE,
-  connectYours,
-  getIdentityKey,
-  getWalletStatus,
-  subscribeWallet,
-  type WalletStatus,
-} from '../lib/yours'
+import { useWallet } from '@1sat/react'
+import { YOURS_CHROME, YOURS_SITE } from '../lib/yours'
 
 function shortKey(key: string | null): string {
   if (!key) return ''
@@ -16,63 +8,43 @@ function shortKey(key: string | null): string {
 }
 
 export function WalletBar() {
-  const [status, setStatus] = useState<WalletStatus>(getWalletStatus())
-  const [identity, setIdentity] = useState<string | null>(getIdentityKey())
-  const [err, setErr] = useState<string | null>(null)
-
-  useEffect(() => {
-    return subscribeWallet(() => {
-      setStatus(getWalletStatus())
-      setIdentity(getIdentityKey())
-    })
-  }, [])
-
-  async function onConnect() {
-    setErr(null)
-    try {
-      await connectYours()
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  if (status === 'detecting') {
-    return <span className="pill">wallet: detecting…</span>
-  }
+  const { status, identityKey, connect, error } = useWallet()
 
   if (status === 'connected') {
     return (
-      <span className="pill accent" title={identity ?? 'Yours'}>
-        yours {shortKey(identity)}
+      <span className="pill accent" title={identityKey ?? 'Yours'}>
+        yours {shortKey(identityKey)}
       </span>
     )
   }
 
-  if (status === 'available' || status === 'connecting') {
+  if (status === 'detecting' || status === 'connecting' || status === 'selecting') {
     return (
-      <>
-        <button
-          type="button"
-          className="pill btn-pill"
-          disabled={status === 'connecting'}
-          onClick={() => void onConnect()}
-        >
-          {status === 'connecting' ? 'Connecting…' : 'Connect Yours'}
-        </button>
-        {err && <span className="err small">{err}</span>}
-      </>
+      <span className="pill">
+        {status === 'detecting' ? 'wallet: detecting…' : 'Connecting…'}
+      </span>
     )
   }
 
   return (
-    <a
-      className="pill"
-      href={YOURS_CHROME}
-      target="_blank"
-      rel="noreferrer"
-      title={YOURS_SITE}
-    >
-      Install Yours Wallet
-    </a>
+    <>
+      <button
+        type="button"
+        className="pill btn-pill"
+        onClick={() => void connect()}
+      >
+        Connect Yours
+      </button>
+      <a
+        className="pill"
+        href={YOURS_CHROME}
+        target="_blank"
+        rel="noreferrer"
+        title={YOURS_SITE}
+      >
+        Get Yours
+      </a>
+      {error && <span className="err small">{error.message}</span>}
+    </>
   )
 }

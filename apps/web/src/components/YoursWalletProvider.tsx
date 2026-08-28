@@ -2,26 +2,23 @@ import { useEffect, type ReactNode } from 'react'
 import { WalletProvider, useWallet } from '@1sat/react'
 import { registerConnect, syncFromProvider } from '../lib/yours'
 
-function injectedProvider(): boolean {
-  const w = window as Window & { yours?: unknown; bitcoin?: unknown }
-  return Boolean(w.yours || w.bitcoin)
-}
-
 function YoursBridge({ children }: { children: ReactNode }) {
-  const { wallet, status, identityKey, connect } = useWallet()
+  const { wallet, status, identityKey, connect, availableProviders } = useWallet()
 
   useEffect(() => {
     registerConnect(() => connect())
   }, [connect])
 
   useEffect(() => {
+    // Yours BRC-100 uses CWI / extension messaging, not window.yours.
+    // `disconnected` is the idle installed state — same as SatPress.
     syncFromProvider({
       status,
       wallet: wallet ?? null,
       identityKey: identityKey ?? null,
-      hasProviders: injectedProvider() || status !== 'disconnected',
+      hasProviders: availableProviders.length > 0 || status !== 'disconnected',
     })
-  }, [status, wallet, identityKey])
+  }, [status, wallet, identityKey, availableProviders.length])
 
   useEffect(() => {
     function onEvent(e: Event) {
@@ -31,7 +28,7 @@ function YoursBridge({ children }: { children: ReactNode }) {
           status: 'disconnected',
           wallet: null,
           identityKey: null,
-          hasProviders: injectedProvider(),
+          hasProviders: true,
         })
       }
     }
@@ -44,8 +41,9 @@ function YoursBridge({ children }: { children: ReactNode }) {
 
 export function YoursWalletProvider({ children }: { children: ReactNode }) {
   return (
-    <WalletProvider autoReconnect>
+    <WalletProvider autoReconnect autoDetect>
       <YoursBridge>{children}</YoursBridge>
     </WalletProvider>
   )
 }
+

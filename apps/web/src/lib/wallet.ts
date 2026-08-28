@@ -93,9 +93,6 @@ export function walletMode(): WalletStatus | 'demo' {
 export async function ensureYoursConnected(): Promise<Brc100Wallet> {
   const yours = new YoursBrc100Wallet()
   if (yours.isAvailable()) return yours
-  if (getWalletStatus() === 'missing') {
-    throw new Error('Install Yours Wallet from yours.org, then refresh this page.')
-  }
   await connectYours()
   if (!yours.isAvailable()) {
     throw new Error('Connect Yours Wallet to continue.')
