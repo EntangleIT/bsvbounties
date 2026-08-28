@@ -78,8 +78,15 @@ server.tool(
     useEscrow: z.boolean().optional(),
     arbiter: z.string().optional().describe('"llm" or a pubkey'),
     acceptanceKind: z
-      .enum(['manual', 'http', 'schema', 'command', 'llm-judge'])
-      .optional(),
+      .enum(['manual', 'http', 'schema', 'command', 'hash', 'llm-judge'])
+      .optional()
+      .describe(
+        'manual | http (JSON APIs) | schema | hash (sha256 of workUri) | llm-judge | command (alias of hash)',
+      ),
+    acceptanceRubric: z
+      .string()
+      .optional()
+      .describe('Rubric/prompt for llm-judge'),
     acceptanceUrl: z.string().optional(),
     jsonPath: z.string().optional(),
     contentTypePrefix: z
@@ -98,6 +105,7 @@ server.tool(
       arbiter,
       acceptanceKind,
       acceptanceUrl,
+      acceptanceRubric,
       jsonPath,
       expectJson,
       contentTypePrefix,
@@ -118,6 +126,7 @@ server.tool(
           jsonPath,
           expect,
           contentTypePrefix,
+          ...(acceptanceRubric ? { rubric: acceptanceRubric } : {}),
         }
       : undefined
     return text(

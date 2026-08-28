@@ -96,7 +96,7 @@ score is 0..1. fraud=true only if the artifact is clearly fabricated or maliciou
       content: `Title: ${opts.title}
 Description: ${opts.description}
 Requirements: ${JSON.stringify(opts.requirements)}
-Rubric: ${opts.rubric ?? 'Match requirements; deliverable must exist.'}
+Rubric: ${opts.rubric?.trim() || 'Match requirements; deliverable must exist.'}
 Notes: ${opts.notes ?? ''}
 Work:
 ${opts.workBody.slice(0, 12000)}`,

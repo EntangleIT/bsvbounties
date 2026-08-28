@@ -95,13 +95,14 @@ Job bodies still live off-chain. `acceptance` is committed in `contentHash`.
 
 | `kind` | Happy path |
 |--------|------------|
-| `manual` | Poster approves (legacy) |
-| `http` | GET/POST `url` or `workUri`; status + optional `jsonPath` / `regex` |
+| `manual` | Poster approves (legacy). Milestone stays `submitted` until settle — not `failed`. |
+| `http` | GET/POST `url` or `workUri`; status + optional `jsonPath` / `regex` / `contentTypePrefix`. **JSON APIs only** — not Drive share pages or raw PNG (use `hash` or `llm-judge`). |
 | `schema` | `workUri` JSON matches a JSON Schema subset |
-| `command` | Re-fetch `workUri`, SHA-256 must match `expectedHash` or `workHash` |
-| `llm-judge` | LLM scores the artifact vs `requirements` |
+| `hash` | Re-fetch `workUri` (follow redirects), reject HTML viewers, SHA-256 body must match `workHash` / `expectedHash` |
+| `command` | Deprecated alias of `hash` |
+| `llm-judge` | LLM scores the artifact vs `requirements` + optional `rubric`/`prompt`; pass auto-releases |
 
-Non-manual pass **auto-approves** escrow (`asVerifier`). Fail stays `submitted` for resubmit.
+Non-manual pass **auto-approves** escrow (`asVerifier`). Fail (and LLM outage/credits) stays `submitted` for resubmit.
 
 `milestones[]` must sum to `amountSats`. Each passing verify releases that slice in the app index; the last slice approves escrow.
 

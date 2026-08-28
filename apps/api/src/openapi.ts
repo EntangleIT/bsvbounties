@@ -157,7 +157,35 @@ export function buildOpenApi(publicUrl: string) {
                     posterLockingScriptHex: { type: 'string' },
                     useEscrow: { type: 'boolean' },
                     arbiter: { type: 'string', description: '"llm" or pubkey' },
-                    acceptance: { type: 'object' },
+                    acceptance: {
+                      type: 'object',
+                      description:
+                        'Acceptance spec. kind: manual | http | schema | hash | command | llm-judge. ' +
+                        'http is for JSON APIs; hash compares workHash to sha256(workUri body); ' +
+                        'llm-judge uses requirements + optional rubric/prompt and auto-releases on pass.',
+                      properties: {
+                        kind: {
+                          type: 'string',
+                          enum: [
+                            'manual',
+                            'http',
+                            'schema',
+                            'hash',
+                            'command',
+                            'llm-judge',
+                          ],
+                        },
+                        rubric: { type: 'string' },
+                        prompt: {
+                          type: 'string',
+                          description: 'Alias for rubric (llm-judge)',
+                        },
+                        passScore: { type: 'number' },
+                        expectedHash: { type: 'string' },
+                        jsonPath: { type: 'string' },
+                        contentTypePrefix: { type: 'string' },
+                      },
+                    },
                     milestones: { type: 'array' },
                     escrowTxid: { type: 'string' },
                     network: { type: 'string', enum: ['main', 'test'] },
@@ -335,7 +363,23 @@ export function buildAgentCard(publicUrl: string) {
         'PATCH /v1/bounties/{id}/escrow',
         'POST /v1/bounties/{id}/settle',
       ],
-      note: 'Mint an account, then POST /v1/auth/challenge → /v1/auth/login (wallet BSM or demo sha256(message:controllerKey)). Send Authorization: Bearer <token>. Creating or indexing a public board bounty requires a session — posterPubKey alone is not enough.',
+      note:
+        'Mint an account, then POST /v1/auth/challenge → /v1/auth/login. ' +
+        'Real Yours/compressed EC keys must Bitcoin-Signed-Message (BSM) sign `message` (compact base64). ' +
+        'Demo sha256_hex(`${message}:${controllerKey}`) is only for non-EC demo keys when AUTH_MODE is demo|both. ' +
+        'Send Authorization: Bearer <token>. Creating a public board bounty requires a session.',
+    },
+    acceptance: {
+      kinds: ['manual', 'http', 'schema', 'hash', 'command', 'llm-judge'],
+      notes: {
+        manual: 'Poster approves; milestone stays submitted until settle.',
+        http: 'JSON APIs (status / jsonPath / regex) or contentTypePrefix. Not for Drive share pages or raw PNG — use hash or llm-judge.',
+        schema: 'workUri JSON must match a JSON Schema subset.',
+        hash: 'Fetch workUri (follow redirects), reject HTML viewers, compare sha256(body) to workHash. Auto-releases on pass.',
+        command: 'Deprecated alias of hash.',
+        'llm-judge':
+          'LLM scores artifact vs requirements + optional acceptance.rubric/prompt. Pass auto-releases; fail/credits stay submitted for resubmit.',
+      },
     },
     payments: {
       asset: 'BSV',

@@ -9,12 +9,18 @@ export type AcceptanceKind =
   | 'http'
   | 'schema'
   | 'command'
+  | 'hash'
   | 'llm-judge'
 
 export interface ManualAcceptance {
   kind: 'manual'
 }
 
+/**
+ * HTTP check for JSON APIs (or Content-Type prefix checks).
+ * Not for Google Drive share pages / raw PNG without contentTypePrefix —
+ * use `hash` or `llm-judge` for file artifacts.
+ */
 export interface HttpAcceptance {
   kind: 'http'
   method?: 'GET' | 'POST'
@@ -35,15 +41,26 @@ export interface SchemaAcceptance {
   schema: Record<string, unknown>
 }
 
+/** @deprecated Prefer `hash`. Same behavior: SHA-256 of workUri body vs workHash. */
 export interface CommandAcceptance {
   kind: 'command'
   /** If omitted, compared to the submitted workHash. */
   expectedHash?: string
 }
 
+/** Fetch workUri (follow redirects), SHA-256 body bytes, compare to workHash. */
+export interface HashAcceptance {
+  kind: 'hash'
+  /** If omitted, compared to the submitted workHash. */
+  expectedHash?: string
+}
+
 export interface LlmJudgeAcceptance {
   kind: 'llm-judge'
+  /** Rubric / scoring criteria (also accepted as `prompt`). */
   rubric?: string
+  /** Alias for `rubric`. */
+  prompt?: string
   /** 0–1 inclusive; default 0.7 */
   passScore?: number
 }
@@ -53,7 +70,19 @@ export type AcceptanceSpec =
   | HttpAcceptance
   | SchemaAcceptance
   | CommandAcceptance
+  | HashAcceptance
   | LlmJudgeAcceptance
+
+/** Reasons that are service/waiting states — not cryptographic verify failures. */
+export const SOFT_VERIFY_REASONS = new Set([
+  'manual_approval_required',
+  'llm_unavailable',
+  'llm_credits_exhausted',
+])
+
+export function isSoftVerification(v: Pick<Verification, 'passed' | 'reason'>): boolean {
+  return !v.passed && SOFT_VERIFY_REASONS.has(v.reason)
+}
 
 export interface Verification {
   passed: boolean
@@ -97,6 +126,7 @@ export function parseAcceptance(raw: unknown): AcceptanceSpec {
     kind === 'http' ||
     kind === 'schema' ||
     kind === 'command' ||
+    kind === 'hash' ||
     kind === 'llm-judge' ||
     kind === 'manual'
   ) {
@@ -279,6 +309,13 @@ export function normalizeWorkFetchUrl(url: string): string {
   return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`
 }
 
+export function looksLikeHtml(contentType: string, bodyText: string): boolean {
+  const ct = contentType.toLowerCase()
+  if (ct.includes('text/html') || ct.includes('application/xhtml')) return true
+  const head = bodyText.trimStart().slice(0, 256).toLowerCase()
+  return head.startsWith('<!doctype html') || head.startsWith('<html')
+}
+
 export function formatVerificationReason(
   v: Pick<Verification, 'passed' | 'reason' | 'kind' | 'details'>,
 ): string {
@@ -291,9 +328,18 @@ export function formatVerificationReason(
   switch (v.reason) {
     case 'response_not_json':
       return (
-        'Work URL did not return JSON. HTTP auto-pay fetches that link and looks for a JSON field ' +
-        '(default `ok: true`). Google Drive share pages and image files are HTML or binary, so they fail. ' +
-        'Use Manual or LLM judge for logos, or submit a JSON API URL.'
+        'Work URL did not return JSON. HTTP acceptance is for JSON APIs, not Drive/PNG files. ' +
+        'Use acceptance.kind "hash" (sha256 of file bytes) or "llm-judge" for artifacts, or submit a JSON API URL.'
+      )
+    case 'http_not_for_drive':
+      return (
+        'HTTP acceptance cannot verify Google Drive share/view links as JSON. ' +
+        'Use acceptance.kind "hash" or "llm-judge", or a direct JSON API URL.'
+      )
+    case 'html_not_artifact':
+      return (
+        'Fetched work URL returned an HTML page (viewer/error), not the file bytes. ' +
+        'Use a direct download/export URL, or acceptance.kind "llm-judge" / manual for non-hashable hosts.'
       )
     case 'content_type_mismatch': {
       const got = v.details?.contentType
@@ -301,10 +347,16 @@ export function formatVerificationReason(
     }
     case 'manual_approval_required':
       return 'Waiting for the poster to approve.'
+    case 'llm_unavailable':
+      return 'LLM judge is unavailable; work stays submitted — resubmit later or ask the poster to approve.'
+    case 'llm_credits_exhausted':
+      return 'LLM credits exhausted; work was not marked failed. Resubmit later or use poster approve.'
     case 'missing_url':
       return 'No work URL to fetch.'
     case 'regex_mismatch':
       return 'Response body did not match the required pattern.'
+    case 'hash_mismatch':
+      return 'SHA-256 of fetched workUri did not match submitted workHash.'
     default:
       return v.reason.replace(/_/g, ' ')
   }

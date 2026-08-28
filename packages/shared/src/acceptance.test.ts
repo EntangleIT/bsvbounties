@@ -10,9 +10,10 @@ import {
   parseAcceptance,
   formatVerificationReason,
   normalizeWorkFetchUrl,
+  isSoftVerification,
 } from './acceptance.js'
 import { verifyWork } from './verify.js'
-import { contentHash } from './hash.js'
+import { contentHash, sha256Hex } from './hash.js'
 
 describe('acceptance helpers', () => {
   it('jsonPath walks nested objects', () => {
@@ -58,7 +59,9 @@ describe('acceptance helpers', () => {
   it('auto-release only for non-manual specs', () => {
     assert.equal(isAutoRelease({ kind: 'manual' }), false)
     assert.equal(isAutoRelease({ kind: 'http' }), true)
+    assert.equal(isAutoRelease({ kind: 'hash' }), true)
     assert.equal(parseAcceptance({ kind: 'schema', schema: {} }).kind, 'schema')
+    assert.equal(parseAcceptance({ kind: 'hash' }).kind, 'hash')
     assert.equal(parseAcceptance({}).kind, 'manual')
   })
 
@@ -83,6 +86,18 @@ describe('acceptance helpers', () => {
     })
     assert.equal(a.length, 64)
   })
+
+  it('soft verification reasons', () => {
+    assert.equal(
+      isSoftVerification({ passed: false, reason: 'manual_approval_required' }),
+      true,
+    )
+    assert.equal(
+      isSoftVerification({ passed: false, reason: 'llm_credits_exhausted' }),
+      true,
+    )
+    assert.equal(isSoftVerification({ passed: false, reason: 'hash_mismatch' }), false)
+  })
 })
 
 describe('verifyWork', () => {
@@ -90,6 +105,7 @@ describe('verifyWork', () => {
     const v = await verifyWork({ acceptance: { kind: 'manual' } })
     assert.equal(v.passed, false)
     assert.equal(v.reason, 'manual_approval_required')
+    assert.equal(isSoftVerification(v), true)
   })
 
   it('http checks status, jsonPath, and regex', async () => {
@@ -169,8 +185,8 @@ describe('verifyWork', () => {
       { fetch: fetchMock },
     )
     assert.equal(v.passed, false)
-    assert.equal(v.reason, 'response_not_json')
-    assert.match(formatVerificationReason(v), /Google Drive/)
+    assert.equal(v.reason, 'http_not_for_drive')
+    assert.match(formatVerificationReason(v), /hash|llm-judge/i)
   })
 
   it('http contentTypePrefix accepts an image', async () => {
@@ -209,5 +225,121 @@ describe('verifyWork', () => {
       fetched,
       'https://drive.google.com/uc?export=download&id=FILEID99',
     )
+  })
+
+  it('hash passes when workHash matches body bytes', async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a])
+    const digest = sha256Hex(bytes)
+    const fetchMock: typeof fetch = async () =>
+      new Response(bytes, {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      })
+    const v = await verifyWork(
+      {
+        acceptance: { kind: 'hash' },
+        workUri: 'https://example.com/logo.png',
+        workHash: digest,
+      },
+      { fetch: fetchMock },
+    )
+    assert.equal(v.passed, true, v.reason)
+    assert.equal(v.reason, 'artifact_hash_matched')
+  })
+
+  it('hash fails on mismatch', async () => {
+    const fetchMock: typeof fetch = async () =>
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { 'content-type': 'application/octet-stream' },
+      })
+    const v = await verifyWork(
+      {
+        acceptance: { kind: 'hash' },
+        workUri: 'https://example.com/blob.bin',
+        workHash: '0'.repeat(64),
+      },
+      { fetch: fetchMock },
+    )
+    assert.equal(v.passed, false)
+    assert.equal(v.reason, 'hash_mismatch')
+  })
+
+  it('hash rejects HTML viewer pages', async () => {
+    const fetchMock: typeof fetch = async () =>
+      new Response('<!doctype html><html><body>viewer</body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      })
+    const v = await verifyWork(
+      {
+        acceptance: { kind: 'hash' },
+        workUri: 'https://drive.google.com/file/d/abc/view',
+        workHash: 'a'.repeat(64),
+      },
+      { fetch: fetchMock },
+    )
+    assert.equal(v.passed, false)
+    assert.equal(v.reason, 'html_not_artifact')
+  })
+
+  it('command kind aliases hash', async () => {
+    const bytes = new TextEncoder().encode('artifact-bytes')
+    const digest = sha256Hex(bytes)
+    const fetchMock: typeof fetch = async () =>
+      new Response(bytes, { status: 200, headers: { 'content-type': 'text/plain' } })
+    const v = await verifyWork(
+      {
+        acceptance: { kind: 'command' },
+        workUri: 'https://example.com/a.txt',
+        workHash: digest,
+      },
+      { fetch: fetchMock },
+    )
+    assert.equal(v.passed, true, v.reason)
+  })
+
+  it('llm-judge mocked pass', async () => {
+    const v = await verifyWork(
+      {
+        acceptance: { kind: 'llm-judge', rubric: 'Must be a logo', passScore: 0.5 },
+        workUri: 'https://example.com/logo.png',
+        requirements: ['square logo'],
+        title: 'Logo',
+        description: 'Make a logo',
+      },
+      {
+        fetch: async () =>
+          new Response(new Uint8Array([1, 2]), {
+            status: 200,
+            headers: { 'content-type': 'image/png' },
+          }),
+        llmJudge: async (input) => {
+          assert.match(input.spec.rubric ?? '', /logo/i)
+          return { pass: true, score: 0.9, reason: 'looks good' }
+        },
+      },
+    )
+    assert.equal(v.passed, true, v.reason)
+    assert.equal(v.score, 0.9)
+  })
+
+  it('llm-judge credits exhausted is soft failure', async () => {
+    const v = await verifyWork(
+      {
+        acceptance: { kind: 'llm-judge' },
+        notes: 'work notes',
+        title: 't',
+        description: 'd',
+      },
+      {
+        llmJudge: async () => {
+          throw new Error('LLM xai error 429: credits exhausted')
+        },
+      },
+    )
+    assert.equal(v.passed, false)
+    assert.equal(v.reason, 'llm_credits_exhausted')
+    assert.equal(isSoftVerification(v), true)
   })
 })
