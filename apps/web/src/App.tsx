@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { Account, Bounty } from '@ai-bounties/shared'
+import {
+  formatVerificationReason,
+  type AcceptanceKind,
+  type Account,
+  type Bounty,
+} from '@ai-bounties/shared'
 import {
   claimBounty,
   disputeBounty,
@@ -72,7 +77,7 @@ export function App() {
         workUri || undefined,
       )) as {
         autoReleased?: boolean
-        verification?: { passed?: boolean; reason?: string }
+        verification?: { passed?: boolean; reason?: string; details?: Record<string, unknown>; kind?: string }
         createActionTemplate?: Parameters<
           Awaited<ReturnType<typeof ensureYoursConnected>>['createAction']
         > extends (a: infer A) => unknown
@@ -87,6 +92,16 @@ export function App() {
       if (template) {
         const wallet = await ensureYoursConnected()
         await wallet.createAction(template)
+      }
+      if (res.verification && res.verification.passed === false) {
+        setError(
+          formatVerificationReason({
+            passed: false,
+            reason: res.verification.reason ?? 'verification_failed',
+            kind: (res.verification.kind as AcceptanceKind) ?? 'manual',
+            details: res.verification.details,
+          }),
+        )
       }
       await refresh()
     } catch (e) {

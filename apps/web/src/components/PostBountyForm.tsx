@@ -12,9 +12,11 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
   const [idea, setIdea] = useState('')
   const [acceptKind, setAcceptKind] = useState<
     'manual' | 'http' | 'llm-judge'
-  >('http')
+  >('manual')
   const [jsonPath, setJsonPath] = useState('ok')
   const [expectValue, setExpectValue] = useState('true')
+  const [checkUrl, setCheckUrl] = useState('')
+  const [contentTypePrefix, setContentTypePrefix] = useState('')
   const [llmArbiter, setLlmArbiter] = useState(false)
   const [splits, setSplits] = useState(1)
   const [busy, setBusy] = useState(false)
@@ -57,7 +59,15 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
 
       const acceptance =
         acceptKind === 'http'
-          ? { kind: 'http' as const, jsonPath, expect, expectStatus: 200 }
+          ? {
+              kind: 'http' as const,
+              expectStatus: 200,
+              ...(checkUrl.trim() ? { url: checkUrl.trim() } : {}),
+              ...(jsonPath.trim() ? { jsonPath: jsonPath.trim(), expect } : {}),
+              ...(contentTypePrefix.trim()
+                ? { contentTypePrefix: contentTypePrefix.trim() }
+                : {}),
+            }
           : acceptKind === 'llm-judge'
             ? { kind: 'llm-judge' as const }
             : { kind: 'manual' as const }
@@ -112,7 +122,8 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
       <h2>Post a bounty</h2>
       <p className="muted">
         Humans and agents can post. Connect Yours Wallet so escrow funds a real
-        BSV output; machine-checkable acceptance can auto-pay the worker.
+        BSV output. Manual or LLM judge for files (logos, Drive). HTTP check only
+        for JSON APIs or a required Content-Type — that GETs the work URL.
       </p>
 
       <label>
@@ -181,9 +192,9 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
               setAcceptKind(e.target.value as 'manual' | 'http' | 'llm-judge')
             }
           >
+            <option value="manual">Manual approve</option>
             <option value="http">HTTP check (auto-pay)</option>
             <option value="llm-judge">LLM judge (auto-pay)</option>
-            <option value="manual">Manual approve</option>
           </select>
         </label>
         <label>
@@ -199,24 +210,48 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
       </div>
 
       {acceptKind === 'http' && (
-        <div className="row">
+        <>
+          <p className="muted small">
+            The verifier GETs the worker’s work URL (or the check URL below). A
+            Google Drive <em>share</em> page is HTML, not JSON — it will fail
+            unless you set Content-Type to <code>image/</code> and the file is
+            public, or you skip HTTP and use Manual / LLM judge.
+          </p>
           <label>
-            JSON path
+            Check URL (optional)
             <input
-              value={jsonPath}
-              onChange={(e) => setJsonPath(e.target.value)}
-              placeholder="ok"
+              value={checkUrl}
+              onChange={(e) => setCheckUrl(e.target.value)}
+              placeholder="Leave blank to fetch the work URL"
             />
           </label>
+          <div className="row">
+            <label>
+              JSON path (optional)
+              <input
+                value={jsonPath}
+                onChange={(e) => setJsonPath(e.target.value)}
+                placeholder="ok — leave empty if not JSON"
+              />
+            </label>
+            <label>
+              Expected value
+              <input
+                value={expectValue}
+                onChange={(e) => setExpectValue(e.target.value)}
+                placeholder="true"
+              />
+            </label>
+          </div>
           <label>
-            Expected value
+            Content-Type prefix (optional)
             <input
-              value={expectValue}
-              onChange={(e) => setExpectValue(e.target.value)}
-              placeholder="true"
+              value={contentTypePrefix}
+              onChange={(e) => setContentTypePrefix(e.target.value)}
+              placeholder="image/  — for logos; not a JSON field"
             />
           </label>
-        </div>
+        </>
       )}
 
       <label className="check">

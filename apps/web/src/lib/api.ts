@@ -69,6 +69,7 @@ export function createBounty(body: {
     expect?: string | number | boolean
     expectStatus?: number
     regex?: string
+    contentTypePrefix?: string
     schema?: Record<string, unknown>
     rubric?: string
   }

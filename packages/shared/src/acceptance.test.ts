@@ -8,6 +8,8 @@ import {
   median,
   isAutoRelease,
   parseAcceptance,
+  formatVerificationReason,
+  normalizeWorkFetchUrl,
 } from './acceptance.js'
 import { verifyWork } from './verify.js'
 import { contentHash } from './hash.js'
@@ -58,6 +60,17 @@ describe('acceptance helpers', () => {
     assert.equal(isAutoRelease({ kind: 'http' }), true)
     assert.equal(parseAcceptance({ kind: 'schema', schema: {} }).kind, 'schema')
     assert.equal(parseAcceptance({}).kind, 'manual')
+  })
+
+  it('rewrites Drive view URLs to uc?export=download', () => {
+    assert.equal(
+      normalizeWorkFetchUrl('https://drive.google.com/file/d/abc/view?usp=sharing'),
+      'https://drive.google.com/uc?export=download&id=abc',
+    )
+    assert.equal(
+      normalizeWorkFetchUrl('https://drive.google.com/open?id=xyz'),
+      'https://drive.google.com/uc?export=download&id=xyz',
+    )
   })
 
   it('content hash unchanged without acceptance', () => {
@@ -140,5 +153,61 @@ describe('verifyWork', () => {
     })
     assert.equal(v.passed, false)
     assert.equal(v.reason, 'unsupported_url_scheme')
+  })
+
+  it('http jsonPath fails on HTML (e.g. Google Drive viewer)', async () => {
+    const fetchMock: typeof fetch = async () =>
+      new Response('<!doctype html><html><body>Drive</body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      })
+    const v = await verifyWork(
+      {
+        acceptance: { kind: 'http', jsonPath: 'ok', expect: true },
+        workUri: 'https://drive.google.com/file/d/abc123/view?usp=sharing',
+      },
+      { fetch: fetchMock },
+    )
+    assert.equal(v.passed, false)
+    assert.equal(v.reason, 'response_not_json')
+    assert.match(formatVerificationReason(v), /Google Drive/)
+  })
+
+  it('http contentTypePrefix accepts an image', async () => {
+    const fetchMock: typeof fetch = async () =>
+      new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      })
+    const v = await verifyWork(
+      {
+        acceptance: { kind: 'http', contentTypePrefix: 'image/' },
+        workUri: 'https://example.com/logo.png',
+      },
+      { fetch: fetchMock },
+    )
+    assert.equal(v.passed, true, v.reason)
+  })
+
+  it('rewrites Google Drive view links to the download endpoint', async () => {
+    let fetched: string | undefined
+    const fetchMock: typeof fetch = async (input) => {
+      fetched = String(input)
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      })
+    }
+    await verifyWork(
+      {
+        acceptance: { kind: 'http', contentTypePrefix: 'image/' },
+        workUri: 'https://drive.google.com/file/d/FILEID99/view?usp=sharing',
+      },
+      { fetch: fetchMock },
+    )
+    assert.equal(
+      fetched,
+      'https://drive.google.com/uc?export=download&id=FILEID99',
+    )
   })
 })

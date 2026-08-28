@@ -2,6 +2,7 @@ import { sha256Hex } from './hash.js'
 import {
   assertHttpUrl,
   getJsonPath,
+  normalizeWorkFetchUrl,
   validateJsonSchema,
   type AcceptanceSpec,
   type LlmJudgeAcceptance,
@@ -90,18 +91,25 @@ async function readUrl(
   url: string,
   deps: VerifyDeps,
   init?: RequestInit,
-): Promise<{ status: number; text: string; json?: unknown }> {
+): Promise<{ status: number; text: string; json?: unknown; contentType: string; bytes: number }> {
   const ok = assertHttpUrl(url)
   if (!ok.ok) throw new Error(ok.error)
   const fetchFn = deps.fetch ?? globalThis.fetch
   if (!fetchFn) throw new Error('fetch_unavailable')
-  const res = await fetchFn(url, {
+  const target = normalizeWorkFetchUrl(url)
+  const headers = new Headers(init?.headers)
+  if (!headers.has('user-agent')) {
+    headers.set('user-agent', 'ai-bounties-verifier/1')
+  }
+  const res = await fetchFn(target, {
     ...init,
+    headers,
     redirect: 'follow',
     signal: init?.signal ?? AbortSignal.timeout(8000),
   })
   const buf = new Uint8Array(await res.arrayBuffer())
   if (buf.byteLength > MAX_BODY) throw new Error('body_too_large')
+  const contentType = res.headers.get('content-type') ?? ''
   const text = new TextDecoder().decode(buf)
   let json: unknown
   try {
@@ -109,7 +117,7 @@ async function readUrl(
   } catch {
     /* not json */
   }
-  return { status: res.status, text, json }
+  return { status: res.status, text, json, contentType, bytes: buf.byteLength }
 }
 
 async function verifyHttp(
@@ -139,7 +147,20 @@ async function verifyHttp(
       kind: 'http',
       reason: `status_${fetched.status}_expected_${expectStatus}`,
       checkedAt: now,
-      details: { status: fetched.status },
+      details: { status: fetched.status, contentType: fetched.contentType },
+    }
+  }
+  if (spec.contentTypePrefix) {
+    const ct = fetched.contentType.toLowerCase()
+    const want = spec.contentTypePrefix.toLowerCase()
+    if (!ct.startsWith(want)) {
+      return {
+        passed: false,
+        kind: 'http',
+        reason: 'content_type_mismatch',
+        checkedAt: now,
+        details: { contentType: fetched.contentType, expect: spec.contentTypePrefix },
+      }
     }
   }
   if (spec.regex) {
@@ -165,6 +186,7 @@ async function verifyHttp(
         kind: 'http',
         reason: 'response_not_json',
         checkedAt: now,
+        details: { contentType: fetched.contentType },
       }
     }
     const got = getJsonPath(fetched.json, spec.jsonPath)
@@ -192,7 +214,7 @@ async function verifyHttp(
     kind: 'http',
     reason: 'http_check_passed',
     checkedAt: now,
-    details: { status: fetched.status, url: target },
+    details: { status: fetched.status, url: target, contentType: fetched.contentType },
   }
 }
 
@@ -207,7 +229,13 @@ async function verifySchema(
   }
   const fetched = await readUrl(input.workUri, deps)
   if (fetched.json === undefined) {
-    return { passed: false, kind: 'schema', reason: 'response_not_json', checkedAt: now }
+    return {
+      passed: false,
+      kind: 'schema',
+      reason: 'response_not_json',
+      checkedAt: now,
+      details: { contentType: fetched.contentType },
+    }
   }
   const result = validateJsonSchema(schema, fetched.json)
   if (!result.ok) {
@@ -282,7 +310,11 @@ async function verifyLlm(
   if (input.workUri) {
     try {
       const fetched = await readUrl(input.workUri, deps)
-      workBody = fetched.text.slice(0, 20_000)
+      if (/^image\//i.test(fetched.contentType)) {
+        workBody = `[image ${fetched.contentType} ${fetched.bytes} bytes at ${normalizeWorkFetchUrl(input.workUri)}]`
+      } else {
+        workBody = fetched.text.slice(0, 20_000)
+      }
     } catch {
       workBody = `${workBody}\n[fetch failed for ${input.workUri}]`
     }

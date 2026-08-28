@@ -24,6 +24,8 @@ export interface HttpAcceptance {
   jsonPath?: string
   expect?: string | number | boolean
   regex?: string
+  /** Response Content-Type must start with this, e.g. `image/` or `application/json`. */
+  contentTypePrefix?: string
   body?: unknown
   headers?: Record<string, string>
 }
@@ -241,4 +243,69 @@ export function assertHttpUrl(url: string): { ok: true; url: URL } | { ok: false
     return { ok: false, error: 'unsupported_url_scheme' }
   }
   return { ok: true, url: parsed }
+}
+
+/** File id from a Google Drive share/view/open URL, if any. */
+export function googleDriveFileId(url: string): string | undefined {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return undefined
+  }
+  const host = parsed.hostname.replace(/^www\./, '')
+  if (host !== 'drive.google.com' && host !== 'docs.google.com') return undefined
+  const idParam = parsed.searchParams.get('id')
+  if (idParam) return idParam
+  const fileMatch = parsed.pathname.match(/\/(?:file|document|presentation|spreadsheets)\/d\/([^/]+)/)
+  return fileMatch?.[1]
+}
+
+/**
+ * Drive *view* links return an HTML viewer, not the file. Rewrite to the
+ * direct-download endpoint so image/content-type checks can see the bytes.
+ */
+export function normalizeWorkFetchUrl(url: string): string {
+  const id = googleDriveFileId(url)
+  if (!id) return url
+  try {
+    const parsed = new URL(url)
+    if (parsed.pathname.includes('/uc') && parsed.searchParams.get('export') === 'download') {
+      return url
+    }
+  } catch {
+    return url
+  }
+  return `https://drive.google.com/uc?export=download&id=${encodeURIComponent(id)}`
+}
+
+export function formatVerificationReason(
+  v: Pick<Verification, 'passed' | 'reason' | 'kind' | 'details'>,
+): string {
+  if (v.passed) {
+    if (v.reason === 'http_check_passed') return 'HTTP check passed'
+    if (v.reason === 'schema_valid') return 'JSON schema valid'
+    if (v.reason === 'artifact_hash_matched') return 'Artifact hash matched'
+    return v.reason.replace(/_/g, ' ')
+  }
+  switch (v.reason) {
+    case 'response_not_json':
+      return (
+        'Work URL did not return JSON. HTTP auto-pay fetches that link and looks for a JSON field ' +
+        '(default `ok: true`). Google Drive share pages and image files are HTML or binary, so they fail. ' +
+        'Use Manual or LLM judge for logos, or submit a JSON API URL.'
+      )
+    case 'content_type_mismatch': {
+      const got = v.details?.contentType
+      return `Work URL Content-Type was ${got ? String(got) : 'missing'}, not the type this bounty requires.`
+    }
+    case 'manual_approval_required':
+      return 'Waiting for the poster to approve.'
+    case 'missing_url':
+      return 'No work URL to fetch.'
+    case 'regex_mismatch':
+      return 'Response body did not match the required pattern.'
+    default:
+      return v.reason.replace(/_/g, ' ')
+  }
 }

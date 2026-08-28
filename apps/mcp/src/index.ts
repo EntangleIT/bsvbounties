@@ -77,6 +77,10 @@ server.tool(
       .optional(),
     acceptanceUrl: z.string().optional(),
     jsonPath: z.string().optional(),
+    contentTypePrefix: z
+      .string()
+      .optional()
+      .describe('Required Content-Type prefix, e.g. image/'),
     expectJson: z
       .string()
       .optional()
@@ -91,6 +95,7 @@ server.tool(
       acceptanceUrl,
       jsonPath,
       expectJson,
+      contentTypePrefix,
       ...rest
     } = args
     let expect: unknown
@@ -107,6 +112,7 @@ server.tool(
           url: acceptanceUrl,
           jsonPath,
           expect,
+          contentTypePrefix,
         }
       : undefined
     return text(

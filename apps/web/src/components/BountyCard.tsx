@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Bounty } from '@ai-bounties/shared'
+import { formatVerificationReason, type Bounty } from '@ai-bounties/shared'
 
 function satsLabel(sats: number): string {
   if (sats >= 100_000_000) return `${(sats / 100_000_000).toFixed(4)} BSV`
@@ -31,6 +31,10 @@ export function BountyCard({
   const [workUri, setWorkUri] = useState(bounty.workUri ?? '')
   const acceptKind = bounty.acceptance?.kind ?? 'manual'
   const released = bounty.releasedSats ?? 0
+  const workPlaceholder =
+    acceptKind === 'http'
+      ? 'JSON API or direct file URL — Drive *share* pages are HTML, not JSON'
+      : 'https://… (Drive, GitHub, image, gist)'
 
   return (
     <article className="card">
@@ -69,7 +73,7 @@ export function BountyCard({
       {bounty.lastVerification && (
         <p className={bounty.lastVerification.passed ? 'ok' : 'err'}>
           Verify: {bounty.lastVerification.passed ? 'pass' : 'fail'} —{' '}
-          {bounty.lastVerification.reason}
+          {formatVerificationReason(bounty.lastVerification)}
         </p>
       )}
       <div className="card-meta">
@@ -95,7 +99,7 @@ export function BountyCard({
           <input
             value={workUri}
             onChange={(e) => setWorkUri(e.target.value)}
-            placeholder="https://… or http://127.0.0.1:9876/"
+            placeholder={workPlaceholder}
           />
         </label>
       )}
