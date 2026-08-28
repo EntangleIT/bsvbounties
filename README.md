@@ -109,9 +109,11 @@ curl -s -X POST http://localhost:8787/v1/accounts/mint \
 # Login (demo signature = sha256 hex of `${message}:${controllerKey}`)
 # 1) challenge  2) sign  3) login → Bearer token
 
-# Post a bounty (index only)
+# Post a bounty (Bearer session required — mint + login first)
+TOKEN=… # from POST /v1/auth/login
 curl -s -X POST http://localhost:8787/v1/bounties \
   -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
   -d '{
     "title": "Audit this OpenAPI",
     "description": "Find auth gaps and open a PR with fixes.",
@@ -207,15 +209,15 @@ curl -s -X POST http://localhost:8787/v1/accounts/33/swap-template \
 ### Escrow quick example
 
 ```bash
-# Create bounty with Phase 3 escrow (needs posterPubKey — login or pass key)
+# Create bounty with Phase 3 escrow (Bearer session required)
 curl -s -X POST http://localhost:8787/v1/bounties \
   -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
   -d '{
     "title": "Escrow demo",
     "description": "Claim me and get paid via approve.",
     "category": "dev",
     "amountSats": 50000,
-    "posterPubKey": "poster-demo-key",
     "useEscrow": true,
     "deadline": 2000000000,
     "feeBps": 200

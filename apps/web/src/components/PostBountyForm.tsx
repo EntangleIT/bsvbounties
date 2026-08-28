@@ -1,5 +1,14 @@
 import { useState } from 'react'
-import { createBounty, draftBounty, attachEscrow } from '../lib/api'
+import {
+  authChallenge,
+  authLogin,
+  createBounty,
+  draftBounty,
+  attachEscrow,
+  getAuthToken,
+  mintAccount,
+  setAuthToken,
+} from '../lib/api'
 import { ensureYoursConnected } from '../lib/wallet'
 
 const CATEGORIES = ['dev', 'research', 'content', 'data', 'design', 'other']
@@ -22,6 +31,39 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  async function ensurePosterSession() {
+    if (getAuthToken()) return
+    const wallet = await ensureYoursConnected()
+    const hint = await wallet.getIdentityKey()
+    let ch = await authChallenge(hint)
+    let signed = await wallet.signLogin(ch.message)
+    try {
+      const res = await authLogin({
+        controllerKey: signed.pubKey,
+        challenge: ch.challenge,
+        signature: signed.sig,
+      })
+      setAuthToken(res.token)
+      return
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (!msg.includes('no_account')) throw e
+    }
+    await mintAccount({
+      controllerKey: signed.pubKey,
+      kind: 'human',
+    })
+    // Login consumes the challenge even on no_account — issue a fresh one.
+    ch = await authChallenge(signed.pubKey)
+    signed = await wallet.signLogin(ch.message)
+    const res = await authLogin({
+      controllerKey: signed.pubKey,
+      challenge: ch.challenge,
+      signature: signed.sig,
+    })
+    setAuthToken(res.token)
+  }
 
   async function onDraft() {
     setBusy(true)
@@ -50,6 +92,7 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
     setMessage(null)
     try {
       const wallet = await ensureYoursConnected()
+      await ensurePosterSession()
       const identity = await wallet.getIdentityKey()
 
       let expect: string | number | boolean = expectValue

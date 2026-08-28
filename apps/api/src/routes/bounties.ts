@@ -239,9 +239,38 @@ export function bountyRoutes(
 
   /**
    * Create / register a bounty with optional Phase 3 escrow deploy template.
+   * Requires a logged-in session (Bearer from POST /v1/auth/login).
    */
   app.post('/', async (c) => {
     const body = createSchema.parse(await c.req.json())
+
+    const session = sessions
+      ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+      : undefined
+    if (!session || !accounts) {
+      return c.json(
+        {
+          error: 'unauthorized',
+          note: 'Login required to post a bounty. Mint an account, then POST /v1/auth/challenge → /v1/auth/login and send Authorization: Bearer <token>.',
+        },
+        401,
+      )
+    }
+
+    const owned = accounts.getByNumber(session.accountNumber)
+    if (!owned || owned.controllerKey !== session.controllerKey) {
+      return c.json(
+        {
+          error: 'stale_session',
+          note: 'Account ownership changed. Log in again.',
+        },
+        401,
+      )
+    }
+
+    const posterAccount = session.accountNumber
+    const posterPubKey = session.controllerKey
+
     const id = generateBountyId()
     const now = new Date().toISOString()
     const acceptance = parseAcceptance(body.acceptance ?? defaultAcceptance())
@@ -291,27 +320,6 @@ export function bountyRoutes(
         acceptance: parseAcceptance(m.acceptance),
       })),
     })
-
-    const session = sessions
-      ? getSessionFromRequest(sessions, c.req.header('Authorization'))
-      : undefined
-
-    let posterAccount = body.posterAccount
-    let posterPubKey = body.posterPubKey
-    if (session && accounts) {
-      const owned = accounts.getByNumber(session.accountNumber)
-      if (!owned || owned.controllerKey !== session.controllerKey) {
-        return c.json(
-          {
-            error: 'stale_session',
-            note: 'Account ownership changed. Log in again.',
-          },
-          401,
-        )
-      }
-      posterAccount = session.accountNumber
-      posterPubKey = session.controllerKey
-    }
 
     if (bonds) {
       const gate = bondGate(bonds, posterPubKey)
@@ -446,6 +454,31 @@ export function bountyRoutes(
       .parse(await c.req.json())
     const existing = store.get(c.req.param('id'))
     if (!existing) return c.json({ error: 'not_found' }, 404)
+
+    const session = sessions
+      ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+      : undefined
+    if (!session) {
+      return c.json(
+        {
+          error: 'unauthorized',
+          note: 'Login required to attach escrowTxid. Send Authorization: Bearer <token>.',
+        },
+        401,
+      )
+    }
+    const posterKey =
+      existing.posterPubKey || existing.escrow?.posterPubKey || ''
+    if (posterKey && session.controllerKey !== posterKey) {
+      return c.json(
+        {
+          error: 'forbidden',
+          note: 'Only the bounty poster session may attach escrowTxid.',
+        },
+        403,
+      )
+    }
+
     const escrow = existing.escrow
       ? {
           ...existing.escrow,
@@ -856,15 +889,25 @@ export function bountyRoutes(
     const existing = store.get(c.req.param('id'))
     if (!existing) return c.json({ error: 'not_found' }, 404)
 
+    const session = sessions
+      ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+      : undefined
+
     if (existing.escrow) {
-      const session = sessions
-        ? getSessionFromRequest(sessions, c.req.header('Authorization'))
-        : undefined
       const signer =
         session?.controllerKey ??
         existing.posterPubKey ??
         existing.escrow.posterPubKey
       if (!signer) return c.json({ error: 'poster_identity_required' }, 400)
+      if (session && session.controllerKey !== signer) {
+        return c.json(
+          {
+            error: 'forbidden',
+            note: 'Settle must use the poster session for this bounty.',
+          },
+          403,
+        )
+      }
 
       const method: EscrowMethod =
         body.outcome === 'paid' ? 'approve' : 'cancel'
@@ -922,6 +965,29 @@ export function bountyRoutes(
         )
       }
       return c.json(action)
+    }
+
+    // Legacy / index-only bounties: poster session required to change board status.
+    if (!session) {
+      return c.json(
+        {
+          error: 'unauthorized',
+          note: 'Login required to settle. Send Authorization: Bearer <token>.',
+        },
+        401,
+      )
+    }
+    if (
+      existing.posterPubKey &&
+      session.controllerKey !== existing.posterPubKey
+    ) {
+      return c.json(
+        {
+          error: 'forbidden',
+          note: 'Only the bounty poster session may settle this listing.',
+        },
+        403,
+      )
     }
 
     if (!['claimed', 'submitted', 'open'].includes(existing.status)) {

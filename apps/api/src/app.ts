@@ -120,8 +120,11 @@ export function createApp(config: CreateAppConfig): Hono {
       description_for_human:
         'BSV bounties, tradable accounts, escrow, poster bonds. MCP server available for agents.',
       description_for_model:
-        'Mint accounts, deposit poster bonds, post/claim BSV bounties with escrow, atomic account swaps. Prefer OpenAPI or MCP tools.',
-      auth: { type: 'none' },
+        'Mint accounts, deposit poster bonds, post/claim BSV bounties with escrow, atomic account swaps. Prefer OpenAPI or MCP tools. POST /v1/bounties requires Bearer session from auth login.',
+      auth: {
+        type: 'bearer',
+        authorization_url: `${config.publicUrl}/v1/auth/login`,
+      },
       api: {
         type: 'openapi',
         url: `${config.publicUrl}/openapi.json`,

@@ -56,26 +56,26 @@ Prints txid + https://test.whatsonchain.com/tx/...
 ## App flow with sCrypt locking script
 
 1. Start API with `NETWORK=test` and `ESCROW_MODE=scrypt`.
-2. Create a bounty with a **real compressed poster pubkey** (66 hex chars, `02`/`03` prefix):
+2. Mint + login, then create a bounty (session controller key should be a **real compressed pubkey** for the scrypt path — 66 hex chars, `02`/`03` prefix):
 
 ```bash
 curl -s -X POST http://localhost:8787/v1/bounties \
   -H 'content-type: application/json' \
+  -H "authorization: Bearer $TOKEN" \
   -d '{
     "title": "Testnet escrow job",
     "description": "Real BountyEscrow covenant on testnet",
     "category": "dev",
     "amountSats": 2000,
-    "posterPubKey": "02…your compressed pubkey…",
     "useEscrow": true
   }' | jq '.createActionTemplate, .note'
 ```
 
 3. Broadcast `createActionTemplate` with a BRC-100 wallet on **testnet** (Metanet / Yours / wallet-cli).
-4. `PATCH /v1/bounties/:id/escrow` with `{ "escrowTxid": "…" }`.
+4. `PATCH /v1/bounties/:id/escrow` with `{ "escrowTxid": "…" }` (same Bearer session).
 5. Claim / submit / approve still run the app state machine and return next templates; full method-call txs can use `instance.methods.*` via scrypt-ts when the UTXO is tracked.
 
-If `posterPubKey` is a demo string (not an EC key), the API falls back to P2PKH hold + state machine so local UI testing still works.
+If the session controller key is a demo string (not an EC key), the API falls back to P2PKH hold + state machine so local UI testing still works.
 
 ## Explorer
 

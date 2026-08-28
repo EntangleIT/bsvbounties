@@ -8,16 +8,16 @@
  * Exit 1 if any unexpected fail.
  */
 import { createHash, randomBytes } from 'node:crypto'
+import { BSM, PrivateKey } from '@bsv/sdk'
 
 const API = process.env.AI_BOUNTIES_API_URL || 'http://localhost:8787'
 const posterKey = process.env.POSTER_CONTROLLER || 'accept-poster-1'
 const workerKey = process.env.WORKER_CONTROLLER || 'accept-worker-1'
 const saleKey = process.env.SALE_CONTROLLER || 'accept-sale-1'
 const buyerKey = process.env.BUYER_CONTROLLER || 'accept-buyer-1'
-/** Real compressed secp256k1 pubkey (test vector) — enables scrypt template path */
-const realPosterPubKey =
-  process.env.POSTER_PUBKEY ||
-  '03717abfa1784ae3a010dc46985f11e5dc72231a5bad6274f7e6501ced5342f38c'
+/** Ephemeral compressed keypair — enables sCrypt template after BSM login */
+const scryptPriv = PrivateKey.fromRandom()
+const realPosterPubKey = scryptPriv.toPublicKey().toString()
 const demoPosterPubKey = 'poster-demo-key-not-ec'
 
 const results = []
@@ -26,6 +26,11 @@ function demoSig(message, controllerKey) {
   return createHash('sha256')
     .update(`${message}:${controllerKey}`)
     .digest('hex')
+}
+
+function bsmSig(message, priv) {
+  const messageBytes = Array.from(new TextEncoder().encode(message))
+  return BSM.sign(messageBytes, priv, 'base64')
 }
 
 function score(id, result, detail = '') {
@@ -64,18 +69,21 @@ async function mint(controllerKey, displayName) {
   return data
 }
 
-async function login(controllerKey) {
+async function login(controllerKey, priv) {
   const ch = await api('/v1/auth/challenge', {
     method: 'POST',
     body: { controllerKey },
   })
   if (ch.status !== 200) throw new Error(`challenge ${ch.status}`)
+  const signature = priv
+    ? bsmSig(ch.data.message, priv)
+    : demoSig(ch.data.message, controllerKey)
   const { status, data } = await api('/v1/auth/login', {
     method: 'POST',
     body: {
       controllerKey,
       challenge: ch.data.challenge,
-      signature: demoSig(ch.data.message, controllerKey),
+      signature,
     },
   })
   if (status !== 200 || !data.token) {
@@ -206,15 +214,35 @@ async function main() {
   score('ui.escrow_edges', 'gap', 'cancel/refund/resolve not wired in UI')
   score('ui.atomic_swap', 'gap', 'no swap-template UI')
 
-  // --- sCrypt deploy template (no session — login overwrites posterPubKey) ---
-  const scryptCreate = await api('/v1/bounties', {
+  // --- Auth gate: guest create must not index a public board listing ---
+  const guestCreate = await api('/v1/bounties', {
     method: 'POST',
     body: {
+      title: 'qa-probe-guest',
+      description: 'must not persist without auth',
+      category: 'other',
+      amountSats: 1,
+    },
+  })
+  score(
+    'bounty.create_requires_auth',
+    guestCreate.status === 401 && guestCreate.data?.error === 'unauthorized'
+      ? 'pass'
+      : 'fail',
+    `status=${guestCreate.status} error=${guestCreate.data?.error}`,
+  )
+
+  // --- sCrypt deploy template (mint+login with real EC key so session pubkey stays compressed) ---
+  await mint(realPosterPubKey, 'Accept Scrypt Poster')
+  const scryptLogin = await login(realPosterPubKey, scryptPriv)
+  const scryptCreate = await api('/v1/bounties', {
+    method: 'POST',
+    token: scryptLogin.token,
+    body: {
       title: 'Acceptance scrypt template',
-      description: 'Unauthenticated create with compressed poster pubkey',
+      description: 'Authenticated create with compressed poster pubkey',
       category: 'dev',
       amountSats: 2000,
-      posterPubKey: realPosterPubKey,
       useEscrow: true,
     },
   })
@@ -244,6 +272,11 @@ async function main() {
     },
   })
   const bountyId = created.data?.bounty?.id
+  score(
+    'bounty.create_authenticated',
+    created.status === 201 && bountyId ? 'pass' : 'fail',
+    `status=${created.status} id=${bountyId ?? 'none'}`,
+  )
 
   if (!bountyId) {
     score('bounty.lifecycle', 'fail', `no bounty id status=${created.status}`)
@@ -251,6 +284,7 @@ async function main() {
   } else {
     const attach = await api(`/v1/bounties/${bountyId}/escrow`, {
       method: 'PATCH',
+      token: posterToken,
       body: { escrowTxid: `demo-accept-${randomBytes(8).toString('hex')}` },
     })
     score(
@@ -287,16 +321,16 @@ async function main() {
     )
   }
 
-  // --- Escrow edges (no session so posterPubKey stays the EC key) ---
+  // --- Escrow edges (authenticated create with real EC poster key) ---
   const arbiterKey = 'accept-arbiter-1'
   const openBounty = await api('/v1/bounties', {
     method: 'POST',
+    token: scryptLogin.token,
     body: {
       title: 'Acceptance cancel',
       description: 'Cancel while open',
       category: 'dev',
       amountSats: 2000,
-      posterPubKey: realPosterPubKey,
       useEscrow: true,
     },
   })
@@ -317,12 +351,12 @@ async function main() {
 
   const claimRefund = await api('/v1/bounties', {
     method: 'POST',
+    token: scryptLogin.token,
     body: {
       title: 'Acceptance early refund + resolve',
       description: 'Refund before deadline should fail; arbiter resolve pays worker',
       category: 'dev',
       amountSats: 2000,
-      posterPubKey: realPosterPubKey,
       arbiterPubKey: arbiterKey,
       useEscrow: true,
       deadline: Math.floor(Date.now() / 1000) + 86400 * 365,
@@ -362,15 +396,17 @@ async function main() {
     score('escrow.resolve_api', 'fail', 'no bounty')
   }
 
-  // Negative: demo pubkey → P2PKH fallback
+  // Negative: demo pubkey → P2PKH fallback (mint+login so posterPubKey is the demo key)
+  await mint(demoPosterPubKey, 'Accept Demo Poster')
+  const demoLogin = await login(demoPosterPubKey)
   const fallback = await api('/v1/bounties', {
     method: 'POST',
+    token: demoLogin.token,
     body: {
       title: 'P2PKH fallback check',
       description: 'Demo pubkey must not claim covenant',
       category: 'dev',
       amountSats: 1000,
-      posterPubKey: demoPosterPubKey,
       useEscrow: true,
     },
   })
