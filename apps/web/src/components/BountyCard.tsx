@@ -119,10 +119,11 @@ export function BountyCard({
           </button>
         )}
         {(bounty.status === 'claimed' || bounty.status === 'submitted') &&
-          acceptKind === 'manual' &&
-          onApprove && (
+          onApprove &&
+          (acceptKind === 'manual' ||
+            bounty.lastVerification?.passed === false) && (
             <button type="button" className="btn secondary" onClick={() => onApprove(bounty.id)}>
-              Approve pay
+              {acceptKind === 'manual' ? 'Approve pay' : 'Approve pay anyway'}
             </button>
           )}
         {(bounty.status === 'claimed' || bounty.status === 'submitted') && onDispute && (
