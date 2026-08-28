@@ -9,6 +9,16 @@ export function buildOpenApi(publicUrl: string) {
         'Phase 6: verifiable acceptance, auto-release, worker bonds, milestones, LLM arbiter. MCP + BRC-100.',
     },
     servers: [{ url: publicUrl }],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          description:
+            'Session token from POST /v1/auth/login (after mint + challenge). Required to create bounties and attach escrowTxid.',
+        },
+      },
+    },
     paths: {
       '/health': {
         get: {
@@ -115,7 +125,9 @@ export function buildOpenApi(publicUrl: string) {
         },
         post: {
           operationId: 'createBounty',
-          summary: 'Create / index a bounty (optional BRC-100 action template)',
+          summary:
+            'Create / index a bounty (auth required; optional BRC-100 action template)',
+          security: [{ bearerAuth: [] }],
           requestBody: {
             required: true,
             content: {
@@ -132,8 +144,16 @@ export function buildOpenApi(publicUrl: string) {
                       items: { type: 'string' },
                     },
                     amountSats: { type: 'integer' },
-                    posterPubKey: { type: 'string' },
-                    posterAccount: { type: 'integer' },
+                    posterPubKey: {
+                      type: 'string',
+                      description:
+                        'Ignored when Authorization Bearer session is present; poster identity comes from the session controller key.',
+                    },
+                    posterAccount: {
+                      type: 'integer',
+                      description:
+                        'Ignored when session present; account number comes from the session.',
+                    },
                     posterLockingScriptHex: { type: 'string' },
                     useEscrow: { type: 'boolean' },
                     arbiter: { type: 'string', description: '"llm" or pubkey' },
@@ -146,7 +166,10 @@ export function buildOpenApi(publicUrl: string) {
               },
             },
           },
-          responses: { '201': { description: 'Created' } },
+          responses: {
+            '201': { description: 'Created' },
+            '401': { description: 'Unauthorized — login required' },
+          },
         },
       },
       '/v1/bounties/{id}': {
@@ -307,7 +330,8 @@ export function buildAgentCard(publicUrl: string) {
     },
     auth: {
       type: 'bearer',
-      note: 'POST /v1/auth/challenge then /v1/auth/login with demo signature sha256(message:controllerKey). Mint account first.',
+      requiredFor: ['POST /v1/bounties', 'PATCH /v1/bounties/{id}/escrow'],
+      note: 'Mint an account, then POST /v1/auth/challenge → /v1/auth/login (wallet BSM or demo sha256(message:controllerKey)). Send Authorization: Bearer <token>. Creating or indexing a public board bounty requires a session — posterPubKey alone is not enough.',
     },
     payments: {
       asset: 'BSV',

@@ -63,7 +63,7 @@ Fill **Result** during a run. Seeded expectations reflect known interim limits.
 | Escrow refund early | refund before deadline → `deadline_not_reached` | Pass | HTTP 409 |
 | Escrow resolve (API) | arbiter `POST …/escrow/resolve` | Pass | Needs `arbiterPubKey` on create |
 | Escrow UI edges | cancel / refund / resolve in web | Gap | Client has `escrowAction` but UI not wired |
-| sCrypt deploy template | compressed `02`/`03` pubkey + `ESCROW_MODE=scrypt` | Pass | Unauthenticated create (login overwrites pubkey) |
+| sCrypt deploy template | compressed `02`/`03` pubkey + `ESCROW_MODE=scrypt` | Pass | Authenticated create (session controller key = compressed pubkey) |
 | Attach escrowTxid | `PATCH …/escrow` | Demo-only | Real txid blocked until faucet funds |
 | Accounts mint / login / profile | challenge → demo sig → Bearer | Demo-only | `AUTH_MODE=demo` only |
 | Marketplace list / buy | list + buy (optional `commit:false`) | Demo-only | Index can transfer without broadcast |

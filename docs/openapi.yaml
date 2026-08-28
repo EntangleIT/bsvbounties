@@ -6,6 +6,12 @@ info:
     Phase 1 API for BSV AI Bounties. Live document is also served at GET /openapi.json.
 servers:
   - url: http://localhost:8787
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Session token from POST /v1/auth/login
 paths:
   /health:
     get:
@@ -38,10 +44,14 @@ paths:
           description: Bounty list
     post:
       operationId: createBounty
-      summary: Create / index a bounty
+      summary: Create / index a bounty (Bearer session required)
+      security:
+        - bearerAuth: []
       responses:
         '201':
           description: Created
+        '401':
+          description: Unauthorized — login required
   /v1/llm/draft-bounty:
     post:
       operationId: draftBounty

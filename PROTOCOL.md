@@ -83,7 +83,7 @@ State machine (see `packages/contracts`):
 
 API:
 
-- `POST /v1/bounties` with `useEscrow: true` (default when `posterPubKey` set)
+- `POST /v1/bounties` with Bearer session (required) and `useEscrow: true` (default when poster identity from session)
 - `GET /v1/bounties/:id/escrow`
 - `POST /v1/bounties/:id/escrow/{approve|cancel|refund|resolve}`
 - claim/submit/settle also drive the escrow machine when `bounty.escrow` is present

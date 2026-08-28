@@ -61,14 +61,19 @@ server.tool(
 
 server.tool(
   'create_bounty',
-  'Create a bounty with optional escrow, acceptance spec, and LLM arbiter.',
+  'Create a bounty (requires Bearer session token from auth_login). Optional escrow, acceptance, LLM arbiter.',
   {
     title: z.string(),
     description: z.string(),
     amountSats: z.number().int().positive(),
     category: z.string().optional(),
-    posterPubKey: z.string().optional(),
-    token: z.string().optional().describe('Bearer session token'),
+    posterPubKey: z
+      .string()
+      .optional()
+      .describe('Ignored when token is set; poster comes from the session'),
+    token: z
+      .string()
+      .describe('Bearer session token from auth_login (required)'),
     deadline: z.number().int().optional(),
     useEscrow: z.boolean().optional(),
     arbiter: z.string().optional().describe('"llm" or a pubkey'),
