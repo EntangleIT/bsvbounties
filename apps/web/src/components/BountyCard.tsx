@@ -33,8 +33,10 @@ export function BountyCard({
   const released = bounty.releasedSats ?? 0
   const workPlaceholder =
     acceptKind === 'http'
-      ? 'JSON API or direct file URL — Drive *share* pages are HTML, not JSON'
-      : 'https://… (Drive, GitHub, image, gist)'
+      ? 'JSON API URL — not Drive/PNG (use hash or llm-judge bounties for files)'
+      : acceptKind === 'hash'
+        ? 'Direct file URL (sha256 must match); Drive share pages are rejected'
+        : 'https://… (Drive, GitHub, image, gist)'
 
   return (
     <article className="card">

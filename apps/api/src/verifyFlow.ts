@@ -35,7 +35,7 @@ export function makeLlmJudge(llm: LlmClient) {
         title: input.title,
         description: input.description,
         requirements: input.requirements,
-        rubric: input.spec.rubric,
+        rubric: input.spec.rubric ?? input.spec.prompt,
         workBody: input.workBody ?? '',
         notes: input.notes,
       }),

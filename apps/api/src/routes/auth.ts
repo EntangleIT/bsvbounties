@@ -68,13 +68,29 @@ export function authRoutes(
       .object({ controllerKey: z.string().min(4) })
       .parse(await c.req.json())
     const issued = await challenges.issue(body.controllerKey)
+    const mode = authMode()
+    const realKey = isCompressedPubKeyHex(body.controllerKey)
+    // Honest hint: real EC/Yours keys must BSM-sign; demo sha256 only for non-EC keys.
+    let demoHint: string
+    if (realKey && mode !== 'demo') {
+      demoHint =
+        'Compressed EC/Yours key: BSM-sign `message` (Bitcoin Signed Message, compact base64). Demo sha256_hex(`${message}:${controllerKey}`) returns 401 invalid_signature.'
+    } else if (!realKey && mode !== 'wallet') {
+      demoHint =
+        'Demo (non-EC) key when AUTH_MODE=demo|both: signature = sha256_hex(`${message}:${controllerKey}`). Real compressed EC/Yours keys must BSM-sign `message` (compact base64) instead.'
+    } else if (realKey && mode === 'demo') {
+      demoHint =
+        'AUTH_MODE=demo: demo sha256_hex(`${message}:${controllerKey}`) accepted even for EC-shaped keys. Production/wallet mode requires BSM.'
+    } else {
+      demoHint =
+        'AUTH_MODE=wallet: BSM-sign `message` (compact base64). Demo sha256 is disabled.'
+    }
     return c.json({
       challenge: issued.challenge,
       message: authMessage(issued.challenge),
       expiresAt: issued.expiresAt,
-      authMode: authMode(),
-      /** Demo (agent) helper. Real Yours keys must BSM-sign `message`. */
-      demoHint: 'agents: signature = sha256_hex(`${message}:${controllerKey}`)',
+      authMode: mode,
+      demoHint,
     })
   })
 

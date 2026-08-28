@@ -20,12 +20,13 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
   const [amountSats, setAmountSats] = useState(10000)
   const [idea, setIdea] = useState('')
   const [acceptKind, setAcceptKind] = useState<
-    'manual' | 'http' | 'llm-judge'
+    'manual' | 'http' | 'hash' | 'llm-judge'
   >('manual')
   const [jsonPath, setJsonPath] = useState('ok')
   const [expectValue, setExpectValue] = useState('true')
   const [checkUrl, setCheckUrl] = useState('')
   const [contentTypePrefix, setContentTypePrefix] = useState('')
+  const [llmRubric, setLlmRubric] = useState('')
   const [llmArbiter, setLlmArbiter] = useState(false)
   const [splits, setSplits] = useState(1)
   const [busy, setBusy] = useState(false)
@@ -111,9 +112,14 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
                 ? { contentTypePrefix: contentTypePrefix.trim() }
                 : {}),
             }
-          : acceptKind === 'llm-judge'
-            ? { kind: 'llm-judge' as const }
-            : { kind: 'manual' as const }
+          : acceptKind === 'hash'
+            ? { kind: 'hash' as const }
+            : acceptKind === 'llm-judge'
+              ? {
+                  kind: 'llm-judge' as const,
+                  ...(llmRubric.trim() ? { rubric: llmRubric.trim() } : {}),
+                }
+              : { kind: 'manual' as const }
 
       const milestones =
         splits > 1
@@ -165,8 +171,8 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
       <h2>Post a bounty</h2>
       <p className="muted">
         Humans and agents can post. Connect Yours Wallet so escrow funds a real
-        BSV output. Manual or LLM judge for files (logos, Drive). HTTP check only
-        for JSON APIs or a required Content-Type — that GETs the work URL.
+        BSV output. Manual / hash / LLM judge for files (logos, Drive). HTTP
+        check only for JSON APIs — that GETs the work URL.
       </p>
 
       <label>
@@ -232,11 +238,14 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
           <select
             value={acceptKind}
             onChange={(e) =>
-              setAcceptKind(e.target.value as 'manual' | 'http' | 'llm-judge')
+              setAcceptKind(
+                e.target.value as 'manual' | 'http' | 'hash' | 'llm-judge',
+              )
             }
           >
             <option value="manual">Manual approve</option>
-            <option value="http">HTTP check (auto-pay)</option>
+            <option value="hash">Hash of file (auto-pay)</option>
+            <option value="http">HTTP JSON API (auto-pay)</option>
             <option value="llm-judge">LLM judge (auto-pay)</option>
           </select>
         </label>
@@ -252,13 +261,32 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
         </label>
       </div>
 
+      {acceptKind === 'hash' && (
+        <p className="muted small">
+          Worker submits <code>workUri</code> + <code>workHash</code> (sha256 of
+          file bytes). Verifier fetches the URL, rejects HTML viewer pages, and
+          auto-pays on match. Prefer a direct download/export link over a Drive
+          share page.
+        </p>
+      )}
+
+      {acceptKind === 'llm-judge' && (
+        <label>
+          Rubric (optional)
+          <textarea
+            value={llmRubric}
+            onChange={(e) => setLlmRubric(e.target.value)}
+            rows={2}
+            placeholder="e.g. Logo must be square PNG with transparent background"
+          />
+        </label>
+      )}
+
       {acceptKind === 'http' && (
         <>
           <p className="muted small">
-            The verifier GETs the worker’s work URL (or the check URL below). A
-            Google Drive <em>share</em> page is HTML, not JSON — it will fail
-            unless you set Content-Type to <code>image/</code> and the file is
-            public, or you skip HTTP and use Manual / LLM judge.
+            HTTP is for JSON APIs (or a Content-Type prefix check). Google Drive
+            share pages and raw PNG files fail — use Hash or LLM judge for those.
           </p>
           <label>
             Check URL (optional)

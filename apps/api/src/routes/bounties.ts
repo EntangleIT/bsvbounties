@@ -11,6 +11,7 @@ import {
   generateBountyId,
   initMilestones,
   isAutoRelease,
+  isSoftVerification,
   parseAcceptance,
   sha256Hex,
   validateMilestones,
@@ -48,7 +49,7 @@ import { runBountyVerifier, runLlmArbiter } from '../verifyFlow.js'
 
 const acceptanceSchema = z
   .object({
-    kind: z.enum(['manual', 'http', 'schema', 'command', 'llm-judge']),
+    kind: z.enum(['manual', 'http', 'schema', 'command', 'hash', 'llm-judge']),
   })
   .passthrough()
 
@@ -792,11 +793,14 @@ export function bountyRoutes(
       llm,
     })
 
+    // Pass → paid. Soft waits (manual / LLM outage) and hard verify fails stay
+    // "submitted" so the worker can resubmit or the poster can approve — never
+    // mark a milestone "failed" while bounty status is still submitted.
     if (milestones?.[milestoneIndex]) {
       milestones[milestoneIndex] = {
         ...milestones[milestoneIndex]!,
         verification,
-        status: verification.passed ? 'paid' : 'failed',
+        status: verification.passed ? 'paid' : 'submitted',
       }
     }
 
@@ -805,7 +809,7 @@ export function bountyRoutes(
     let autoReleased = false
     let approveAction: unknown = null
 
-    if (spec.kind !== 'manual') {
+    if (spec.kind !== 'manual' && !isSoftVerification(verification)) {
       await recordWorkerVerify(
         bounty,
         verification.passed,
@@ -856,13 +860,17 @@ export function bountyRoutes(
       approve: approveAction,
       note: autoReleased
         ? 'Verifier passed; escrow auto-approved.'
-        : spec.kind === 'manual'
+        : spec.kind === 'manual' || verification.reason === 'manual_approval_required'
           ? 'Submitted. Poster (or LLM arbiter) must approve.'
           : verification.passed
             ? milestones?.some((m) => m.status !== 'paid')
               ? 'Milestone passed; submit the next slice.'
               : 'Verified; awaiting poster approve (manual acceptance).'
-            : 'Verification failed; resubmit before the deadline or open a dispute.',
+            : isSoftVerification(verification)
+              ? verification.reason === 'llm_credits_exhausted'
+                ? 'LLM credits exhausted; work stays submitted (not failed). Resubmit later or ask the poster to approve.'
+                : 'Verifier temporarily unavailable; work stays submitted. Resubmit later or ask the poster to approve.'
+              : 'Verification failed; resubmit before the deadline or open a dispute.',
     }
   }
 

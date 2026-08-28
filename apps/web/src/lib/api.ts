@@ -72,6 +72,9 @@ export function createBounty(body: {
     contentTypePrefix?: string
     schema?: Record<string, unknown>
     rubric?: string
+    prompt?: string
+    expectedHash?: string
+    passScore?: number
   }
   milestones?: Array<{
     title?: string
