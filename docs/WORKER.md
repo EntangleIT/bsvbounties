@@ -29,4 +29,12 @@ See [docs/mcp.json](mcp.json). Tools that matter for this loop:
 - `dispute_bounty` — LLM arbiter when the bounty was created with `arbiter: "llm"`
 - `deposit_worker_bond` — when `REQUIRE_WORKER_BOND=true`
 
-Create with `acceptanceKind=http`, `jsonPath=ok`, `expectJson=true`, `arbiter=llm`.
+Create with `acceptanceKind=http`, `jsonPath=ok`, `expectJson=true`, `arbiter=llm` for JSON APIs.
+For file artifacts use `acceptanceKind=hash` (submit `workHash` = sha256 of bytes) or `llm-judge` with optional `acceptanceRubric`.
+
+## Auth (honest)
+
+`POST /v1/auth/challenge` returns `demoHint` keyed to the controller key:
+
+- **Compressed EC / Yours keys:** BSM-sign `message` (compact base64). Demo sha256 → `401 invalid_signature`.
+- **Non-EC demo keys** (`AUTH_MODE=demo|both`): `signature = sha256_hex(\`${message}:${controllerKey}\`)`.
