@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { createBounty, draftBounty, attachEscrow } from '../lib/api'
-import { getWallet } from '../lib/wallet'
+import { ensureYoursConnected } from '../lib/wallet'
 
 const CATEGORIES = ['dev', 'research', 'content', 'data', 'design', 'other']
 
@@ -47,8 +47,8 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
     setError(null)
     setMessage(null)
     try {
-      const wallet = getWallet()
-      const identity = await wallet.getIdentityKey?.()
+      const wallet = await ensureYoursConnected()
+      const identity = await wallet.getIdentityKey()
 
       let expect: string | number | boolean = expectValue
       if (expectValue === 'true') expect = true
@@ -88,25 +88,9 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
           await attachEscrow(created.bounty.id, result.txid)
           setMessage(`Posted on-chain. txid=${result.txid}`)
         } else {
-          setMessage('Bounty created; wallet did not return txid yet.')
+          setMessage('Bounty created; Yours Wallet did not return a txid yet.')
         }
       } else {
-        // Still try demo createAction for UX path logging
-        const demoAction = {
-          description: `Post AI Bounty: ${title}`,
-          labels: ['ai-bounties', 'bounty:post'],
-          outputs: [
-            {
-              satoshis: amountSats,
-              lockingScript: '76a914' + '00'.repeat(20) + '88ac',
-              outputDescription: 'placeholder escrow',
-            },
-          ],
-        }
-        const result = await wallet.createAction(demoAction)
-        if (result.txid) {
-          await attachEscrow(created.bounty.id, result.txid)
-        }
         setMessage(
           `Bounty indexed (${created.bounty.id.slice(0, 8)}…). ${created.note}`,
         )
@@ -127,8 +111,8 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
     <form className="panel form" onSubmit={onSubmit}>
       <h2>Post a bounty</h2>
       <p className="muted">
-        Humans and agents can post. Machine-checkable acceptance can auto-pay
-        the worker; BRC-100 templates attach when a locking script is available.
+        Humans and agents can post. Connect Yours Wallet so escrow funds a real
+        BSV output; machine-checkable acceptance can auto-pay the worker.
       </p>
 
       <label>

@@ -139,6 +139,7 @@ export class ChallengeStore {
     const challenge = randomBytes(24).toString('hex')
     const expires = Date.now() + 5 * 60 * 1000
     this.map.set(controllerKey, { challenge, expires })
+    this.map.set(challenge, { challenge, expires })
     if (this.map.size > 500) {
       const now = Date.now()
       for (const [k, v] of this.map) {
@@ -150,15 +151,18 @@ export class ChallengeStore {
   }
 
   async consume(controllerKey: string, challenge: string): Promise<boolean> {
-    const row = this.map.get(controllerKey)
+    const row =
+      this.map.get(challenge) ?? this.map.get(controllerKey)
     if (!row) return false
     if (row.expires < Date.now()) {
       this.map.delete(controllerKey)
+      this.map.delete(challenge)
       await this.persist()
       return false
     }
     if (row.challenge !== challenge) return false
     this.map.delete(controllerKey)
+    this.map.delete(challenge)
     await this.persist()
     return true
   }

@@ -8,10 +8,12 @@ import {
   settleBounty,
   submitWork,
 } from './lib/api'
-import { getWallet, walletMode } from './lib/wallet'
+import { ensureYoursConnected, walletMode } from './lib/wallet'
+import { subscribeWallet } from './lib/yours'
 import { BountyCard } from './components/BountyCard'
 import { PostBountyForm } from './components/PostBountyForm'
 import { AccountPanel } from './components/AccountPanel'
+import { WalletBar } from './components/WalletBar'
 
 export function App() {
   const [bounties, setBounties] = useState<Bounty[]>([])
@@ -22,7 +24,9 @@ export function App() {
     null,
   )
   const [account, setAccount] = useState<Account | null>(null)
-  const mode = walletMode()
+  const [mode, setMode] = useState(walletMode())
+
+  useEffect(() => subscribeWallet(() => setMode(walletMode())), [])
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -46,7 +50,9 @@ export function App() {
 
   async function onClaim(id: string) {
     try {
-      await claimBounty(id)
+      const wallet = await ensureYoursConnected()
+      const workerPubKey = await wallet.getIdentityKey()
+      await claimBounty(id, { workerPubKey })
       await refresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -68,7 +74,7 @@ export function App() {
         autoReleased?: boolean
         verification?: { passed?: boolean; reason?: string }
         createActionTemplate?: Parameters<
-          ReturnType<typeof getWallet>['createAction']
+          Awaited<ReturnType<typeof ensureYoursConnected>>['createAction']
         > extends (a: infer A) => unknown
           ? A
           : never
@@ -79,7 +85,8 @@ export function App() {
         (res.approve as { createActionTemplate?: typeof res.createActionTemplate })
           ?.createActionTemplate
       if (template) {
-        await getWallet().createAction(template)
+        const wallet = await ensureYoursConnected()
+        await wallet.createAction(template)
       }
       await refresh()
     } catch (e) {
@@ -106,7 +113,8 @@ export function App() {
         }
       }
       if (res.createActionTemplate) {
-        await getWallet().createAction(res.createActionTemplate)
+        const wallet = await ensureYoursConnected()
+        await wallet.createAction(res.createActionTemplate)
       }
       await refresh()
     } catch (e) {
@@ -126,6 +134,7 @@ export function App() {
           </p>
         </div>
         <div className="status-pills">
+          <WalletBar />
           <span className="pill">wallet: {mode}</span>
           {account && <span className="pill accent">#{account.number}</span>}
           {llm && (
@@ -191,13 +200,21 @@ export function App() {
       </main>
 
       <footer className="footer">
-        <a href="/openapi.json" target="_blank" rel="noreferrer">
+        <a
+          href={`${import.meta.env.VITE_API_URL || ''}/openapi.json`}
+          target="_blank"
+          rel="noreferrer"
+        >
           OpenAPI
         </a>
-        <a href="/.well-known/agent.json" target="_blank" rel="noreferrer">
+        <a
+          href={`${import.meta.env.VITE_API_URL || ''}/.well-known/agent.json`}
+          target="_blank"
+          rel="noreferrer"
+        >
           Agent card
         </a>
-        <span>Protocol: aibounties v0.1 · Phase 6 auto-release</span>
+        <span>Protocol: aibounties v0.1 · Yours Wallet · Phase 6</span>
       </footer>
     </div>
   )

@@ -127,6 +127,26 @@ h1 {
   font-weight: 600;
 }
 
+button.pill.btn-pill,
+a.pill {
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  font: inherit;
+}
+
+button.pill.btn-pill {
+  color: #04140c;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+button.pill.btn-pill:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .account-badge {
   display: flex;
   gap: 0.75rem;

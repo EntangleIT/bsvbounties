@@ -1,6 +1,10 @@
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { authMessage } from '@ai-bounties/shared'
+import {
+  authMessage,
+  isCompressedPubKeyHex,
+  verifyBsmSignature,
+} from '@ai-bounties/shared'
 import type { AccountStore } from '../store/accountStore.js'
 import type { SessionStore } from '../store/sessionStore.js'
 import {
@@ -19,6 +23,28 @@ function bearer(c: { req: { header: (n: string) => string | undefined } }): stri
   const h = c.req.header('Authorization')
   if (!h?.startsWith('Bearer ')) return null
   return h.slice(7).trim()
+}
+
+function authMode(): 'demo' | 'wallet' | 'both' {
+  const m = (process.env.AUTH_MODE ?? 'both').toLowerCase()
+  if (m === 'wallet' || m === 'bsm') return 'wallet'
+  if (m === 'demo') return 'demo'
+  return 'both'
+}
+
+function signatureValid(message: string, controllerKey: string, signature: string): boolean {
+  const mode = authMode()
+  const realKey = isCompressedPubKeyHex(controllerKey)
+  const bsmOk = realKey && verifyBsmSignature(message, controllerKey, signature)
+  const demoOk = verifyDemoSignature(message, controllerKey, signature)
+
+  // Real EC keys must BSM-sign so a stolen identity hex cannot be demo-forged.
+  if (realKey) {
+    if (mode === 'demo') return demoOk
+    return Boolean(bsmOk)
+  }
+  if (mode === 'wallet') return false
+  return demoOk
 }
 
 export function authRoutes(
@@ -46,9 +72,9 @@ export function authRoutes(
       challenge: issued.challenge,
       message: authMessage(issued.challenge),
       expiresAt: issued.expiresAt,
-      authMode: process.env.AUTH_MODE ?? 'demo',
-      /** Client helper: compute demo sig as sha256(message + ":" + controllerKey) */
-      demoHint: 'signature = sha256_hex(`${message}:${controllerKey}`)',
+      authMode: authMode(),
+      /** Demo (agent) helper. Real Yours keys must BSM-sign `message`. */
+      demoHint: 'agents: signature = sha256_hex(`${message}:${controllerKey}`)',
     })
   })
 
@@ -67,7 +93,7 @@ export function authRoutes(
     }
 
     const message = authMessage(body.challenge)
-    if (!verifyDemoSignature(message, body.controllerKey, body.signature)) {
+    if (!signatureValid(message, body.controllerKey, body.signature)) {
       return c.json({ error: 'invalid_signature' }, 401)
     }
 

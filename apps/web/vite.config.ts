@@ -4,6 +4,9 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   base: process.env.VITE_BASE || '/',
+  optimizeDeps: {
+    include: ['@1sat/react', '@1sat/actions', '@1sat/connect', '@1sat/client'],
+  },
   server: {
     port: 5173,
     proxy: {

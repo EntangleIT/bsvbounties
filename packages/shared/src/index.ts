@@ -5,4 +5,5 @@ export * from './accounts.js'
 export * from './bonds.js'
 export * from './acceptance.js'
 export * from './verify.js'
+export * from './bsm.js'
 

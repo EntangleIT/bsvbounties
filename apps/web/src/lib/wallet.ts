@@ -1,72 +1,50 @@
 /**
- * BRC-100 wallet client (Metanet Client, Yours, bsv-wallet-cli, etc.)
- *
- * Phase 1: thin wrapper around window.bitcoin / MetaNet-style interfaces.
- * When no wallet is present, runs in "demo mode" (API index only).
+ * BRC-100 wallet client. Production uses Yours Wallet via @1sat/react.
+ * Demo fake-txids are opt-in only (`VITE_ALLOW_DEMO_WALLET=true`).
  */
+import {
+  connectYours,
+  createActionWithYours,
+  getActiveContext,
+  getIdentityKey,
+  getWalletStatus,
+  signLoginMessage,
+  type CreateActionArgs,
+  type CreateActionResult,
+  type WalletStatus,
+} from './yours'
 
-export interface CreateActionOutput {
-  satoshis: number
-  lockingScript: string
-  outputDescription?: string
-}
-
-export interface CreateActionArgs {
-  description: string
-  labels?: string[]
-  outputs: CreateActionOutput[]
-}
-
-export interface CreateActionResult {
-  txid?: string
-  tx?: unknown
-  rawTx?: string
-}
+export type { CreateActionArgs, CreateActionResult }
 
 export interface Brc100Wallet {
   isAvailable(): boolean
-  getIdentityKey?(): Promise<string | undefined>
+  getIdentityKey(): Promise<string>
   createAction(args: CreateActionArgs): Promise<CreateActionResult>
+  signLogin(message: string): Promise<{ sig: string; pubKey: string }>
 }
 
-declare global {
-  interface Window {
-    bitcoin?: {
-      isReady?: boolean
-      createAction?: (args: CreateActionArgs) => Promise<CreateActionResult>
-      getPublicKey?: () => Promise<{ publicKey?: string } | string>
-      getIdentityKey?: () => Promise<string>
-    }
-    yours?: {
-      isReady?: boolean
-      request?: (method: string, params?: unknown) => Promise<unknown>
-    }
-  }
-}
+const allowDemo = import.meta.env.VITE_ALLOW_DEMO_WALLET === 'true'
 
-class BrowserBrc100Wallet implements Brc100Wallet {
+class YoursBrc100Wallet implements Brc100Wallet {
   isAvailable(): boolean {
-    return Boolean(window.bitcoin?.createAction)
+    return getWalletStatus() === 'connected' && Boolean(getActiveContext())
   }
 
-  async getIdentityKey(): Promise<string | undefined> {
-    if (window.bitcoin?.getIdentityKey) {
-      return window.bitcoin.getIdentityKey()
+  async getIdentityKey(): Promise<string> {
+    if (!this.isAvailable()) {
+      throw new Error('Connect Yours Wallet first.')
     }
-    if (window.bitcoin?.getPublicKey) {
-      const r = await window.bitcoin.getPublicKey()
-      return typeof r === 'string' ? r : r?.publicKey
-    }
-    return undefined
+    const id = getIdentityKey()
+    if (id) return id
+    throw new Error('Yours Wallet did not return an identity key.')
   }
 
   async createAction(args: CreateActionArgs): Promise<CreateActionResult> {
-    if (!window.bitcoin?.createAction) {
-      throw new Error(
-        'No BRC-100 wallet detected. Install Metanet Client or Yours Wallet.',
-      )
-    }
-    return window.bitcoin.createAction(args)
+    return createActionWithYours(args)
+  }
+
+  async signLogin(message: string): Promise<{ sig: string; pubKey: string }> {
+    return signLoginMessage(message)
   }
 }
 
@@ -76,7 +54,7 @@ class DemoWallet implements Brc100Wallet {
     return true
   }
 
-  async getIdentityKey(): Promise<string | undefined> {
+  async getIdentityKey(): Promise<string> {
     return 'demo-identity-key'
   }
 
@@ -89,19 +67,38 @@ class DemoWallet implements Brc100Wallet {
         .join('')
     return { txid: fake.slice(0, 64) }
   }
-}
 
-let cached: Brc100Wallet | null = null
-
-export function getWallet(preferDemo = false): Brc100Wallet {
-  if (preferDemo) return new DemoWallet()
-  if (!cached) {
-    const real = new BrowserBrc100Wallet()
-    cached = real.isAvailable() ? real : new DemoWallet()
+  async signLogin(message: string): Promise<{ sig: string; pubKey: string }> {
+    const data = new TextEncoder().encode(`${message}:demo-identity-key`)
+    const hash = await crypto.subtle.digest('SHA-256', data)
+    const sig = Array.from(new Uint8Array(hash))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+    return { sig, pubKey: 'demo-identity-key' }
   }
-  return cached
 }
 
-export function walletMode(): 'brc100' | 'demo' {
-  return new BrowserBrc100Wallet().isAvailable() ? 'brc100' : 'demo'
+export function getWallet(): Brc100Wallet {
+  const yours = new YoursBrc100Wallet()
+  if (yours.isAvailable()) return yours
+  if (allowDemo) return new DemoWallet()
+  return yours
+}
+
+export function walletMode(): WalletStatus | 'demo' {
+  if (allowDemo && getWalletStatus() !== 'connected') return 'demo'
+  return getWalletStatus()
+}
+
+export async function ensureYoursConnected(): Promise<Brc100Wallet> {
+  const yours = new YoursBrc100Wallet()
+  if (yours.isAvailable()) return yours
+  if (getWalletStatus() === 'missing') {
+    throw new Error('Install Yours Wallet from yours.org, then refresh this page.')
+  }
+  await connectYours()
+  if (!yours.isAvailable()) {
+    throw new Error('Connect Yours Wallet to continue.')
+  }
+  return yours
 }

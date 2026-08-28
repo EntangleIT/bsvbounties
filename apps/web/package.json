@@ -13,7 +13,11 @@
     "@ai-bounties/shared": "*",
     "esbuild": "^0.25.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "@1sat/actions": "^0.0.197",
+    "@1sat/client": "^0.0.49",
+    "@1sat/connect": "^0.0.88",
+    "@1sat/react": "^0.0.85"
   },
   "devDependencies": {
     "@types/react": "^19.0.12",

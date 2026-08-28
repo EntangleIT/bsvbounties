@@ -136,7 +136,12 @@ export interface CreateActionTemplate {
     satoshis: number
     lockingScript: string
     outputDescription?: string
+    basket?: string
   }>
+  options?: {
+    acceptDelayedBroadcast?: boolean
+    randomizeOutputs?: boolean
+  }
 }
 
 export function buildDeployEscrowTemplate(opts: {
@@ -152,11 +157,13 @@ export function buildDeployEscrowTemplate(opts: {
   return {
     description: `Deploy AI Bounty escrow: ${opts.title}`,
     labels: [BRC100_LABELS.app, BRC100_LABELS.post, 'escrow:deploy'],
+    options: { acceptDelayedBroadcast: false, randomizeOutputs: false },
     outputs: [
       {
         satoshis: opts.snapshot.amountSats,
         lockingScript: hold,
         outputDescription: `Escrow hold (${stateName(opts.snapshot.state)})`,
+        basket: 'ai-bounties-escrow',
       },
       {
         satoshis: 0,

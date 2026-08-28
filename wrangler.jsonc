@@ -11,9 +11,9 @@
     "head_sampling_rate": 1
   },
   "vars": {
-    "NETWORK": "test",
+    "NETWORK": "main",
     "ESCROW_MODE": "app",
-    "AUTH_MODE": "demo",
+    "AUTH_MODE": "both",
     "PUBLIC_URL": "https://entangleit.com/bsvbounties",
     "WEB_ORIGIN": "https://entangleit.com",
     "REQUIRE_POSTER_BOND": "false",

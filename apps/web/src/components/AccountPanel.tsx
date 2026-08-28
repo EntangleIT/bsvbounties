@@ -7,7 +7,6 @@ import {
   authMe,
   buyAccount,
   delistAccount,
-  demoSign,
   getAuthToken,
   getMarketplace,
   listAccountForSale,
@@ -16,7 +15,7 @@ import {
   transferAccount,
   updateProfile,
 } from '../lib/api'
-import { getWallet } from '../lib/wallet'
+import { ensureYoursConnected } from '../lib/wallet'
 
 export function AccountPanel({
   account,
@@ -65,13 +64,31 @@ export function AccountPanel({
     }
   }
 
-  async function loginWithKey(controllerKey: string, accountNumber?: number) {
-    const ch = await authChallenge(controllerKey)
-    const signature = await demoSign(ch.message, controllerKey)
-    const res = await authLogin({
-      controllerKey,
+  async function proveWallet() {
+    const wallet = await ensureYoursConnected()
+    const hint = await wallet.getIdentityKey()
+    const ch = await authChallenge(hint)
+    const signed = await wallet.signLogin(ch.message)
+    return {
+      wallet,
+      controllerKey: signed.pubKey,
       challenge: ch.challenge,
-      signature,
+      signature: signed.sig,
+    }
+  }
+
+  async function loginWithProof(
+    proof: {
+      controllerKey: string
+      challenge: string
+      signature: string
+    },
+    accountNumber?: number,
+  ) {
+    const res = await authLogin({
+      controllerKey: proof.controllerKey,
+      challenge: proof.challenge,
+      signature: proof.signature,
       accountNumber,
     })
     setAuthToken(res.token)
@@ -84,12 +101,10 @@ export function AccountPanel({
     setErr(null)
     setMsg(null)
     try {
-      const wallet = getWallet()
-      const controllerKey =
-        (await wallet.getIdentityKey?.()) ?? 'demo-identity-key'
+      const proof = await proveWallet()
       const preferredNumber = preferred ? Number(preferred) : undefined
       const minted = await mintAccount({
-        controllerKey,
+        controllerKey: proof.controllerKey,
         displayName: displayName || undefined,
         bio: bio || undefined,
         kind: 'human',
@@ -99,16 +114,16 @@ export function AccountPanel({
             : undefined,
       })
       if (minted.createActionTemplate) {
-        const tx = await wallet.createAction(
+        const tx = await proof.wallet.createAction(
           minted.createActionTemplate as Parameters<
-            typeof wallet.createAction
+            typeof proof.wallet.createAction
           >[0],
         )
         if (tx.txid) {
           setMsg(`Minted #${minted.account.number}, tx ${tx.txid.slice(0, 12)}…`)
         }
       }
-      await loginWithKey(controllerKey, minted.account.number)
+      await loginWithProof(proof, minted.account.number)
       setMsg((m) => m ?? `Minted & logged in as #${minted.account.number}`)
       await refreshMarket()
     } catch (e) {
@@ -123,10 +138,8 @@ export function AccountPanel({
     setErr(null)
     setMsg(null)
     try {
-      const wallet = getWallet()
-      const controllerKey =
-        (await wallet.getIdentityKey?.()) ?? 'demo-identity-key'
-      const a = await loginWithKey(controllerKey)
+      const proof = await proveWallet()
+      const a = await loginWithProof(proof)
       setMsg(`Logged in as #${a.number}`)
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -220,10 +233,8 @@ export function AccountPanel({
     setBusy(true)
     setErr(null)
     try {
-      const wallet = getWallet()
-      const buyerKey =
-        (await wallet.getIdentityKey?.()) ??
-        `demo-buyer-${crypto.randomUUID().slice(0, 8)}`
+      const wallet = await ensureYoursConnected()
+      const buyerKey = await wallet.getIdentityKey()
       const res = await buyAccount(n, buyerKey)
       setAuthToken(res.session.token)
       onAccountChange(res.account)
@@ -240,8 +251,8 @@ export function AccountPanel({
     <div className="panel account-panel">
       <h2>Accounts</h2>
       <p className="muted">
-        Numbered identities (#33 style). Ownership = controller key. List and
-        sell like Twetch.
+        Numbered identities (#33 style). Ownership = Yours Wallet key. Connect
+        the extension, then mint or log in.
       </p>
 
       {account ? (

@@ -77,6 +77,7 @@ export function createApp(config: CreateAppConfig): Hono {
       activeBonds: bonds.countActive(),
       requirePosterBond: process.env.REQUIRE_POSTER_BOND === 'true',
       requireWorkerBond: process.env.REQUIRE_WORKER_BOND === 'true',
+      authMode: process.env.AUTH_MODE ?? 'both',
       mcp: `${config.publicUrl.replace(/\/$/, '')} → run apps/mcp (stdio)`,
     }),
   )

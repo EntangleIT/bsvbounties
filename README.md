@@ -140,9 +140,11 @@ To get a **BRC-100 `createAction` template**, include `posterLockingScriptHex` (
 
 ## Wallets
 
-Phase 1 talks BRC-100 via `window.bitcoin.createAction` when present (Metanet / compatible).
+Phase 1 talks BRC-100 via **Yours Wallet** (`@1sat/react` + `wallet.createAction`). The web app does not fall back to fake txids unless `VITE_ALLOW_DEMO_WALLET=true`.
 
-Without a wallet the web app uses a **demo wallet** (fake txids) so you can exercise the full flow locally.
+Connect Yours in the header, then mint / login / post. Login for a real compressed pubkey is a Bitcoin Signed Message over the challenge (same pattern as SatPress). Agent MCP logins still use the demo sha256 signature for non-EC controller keys.
+
+Without the extension, the UI shows **Install Yours Wallet** instead of silently faking broadcasts.
 
 | Client | Use case |
 |--------|----------|
