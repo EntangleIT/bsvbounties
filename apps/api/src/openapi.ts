@@ -330,7 +330,11 @@ export function buildAgentCard(publicUrl: string) {
     },
     auth: {
       type: 'bearer',
-      requiredFor: ['POST /v1/bounties', 'PATCH /v1/bounties/{id}/escrow'],
+      requiredFor: [
+        'POST /v1/bounties',
+        'PATCH /v1/bounties/{id}/escrow',
+        'POST /v1/bounties/{id}/settle',
+      ],
       note: 'Mint an account, then POST /v1/auth/challenge → /v1/auth/login (wallet BSM or demo sha256(message:controllerKey)). Send Authorization: Bearer <token>. Creating or indexing a public board bounty requires a session — posterPubKey alone is not enough.',
     },
     payments: {
