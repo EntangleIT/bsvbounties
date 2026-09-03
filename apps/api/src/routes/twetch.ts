@@ -283,6 +283,25 @@ export function twetchRoutes(deps: TwetchRouteDeps) {
     c: { json: (body: unknown, status?: number) => Response },
     claims: VerifiedTwetchClaims,
   ) {
+    // The sub is the stable identity: whoever carries it IS the account,
+    // regardless of controller key (wallet-linked, native, or unlinked).
+    // This keeps the one-sub-per-account invariant the link flow enforces.
+    const bySub = accounts.getByTwetchSub(claims.sub)
+    if (bySub) {
+      const refreshed = await accounts.update(bySub.number, {
+        twetch: identityFromClaims(claims),
+      })
+      const session = await sessions.create(
+        bySub.controllerKey,
+        bySub.number,
+      )
+      return c.json({
+        token: session.token,
+        expiresAt: session.expiresAt,
+        account: refreshed ?? bySub,
+        newAccount: false,
+      })
+    }
     const controllerKey = twetchControllerKey(claims.sub)
     const owned = accounts.getByController(controllerKey)
     if (owned.length > 0) {

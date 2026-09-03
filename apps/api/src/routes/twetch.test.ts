@@ -514,4 +514,53 @@ describe('Login with Twetch', () => {
       delete process.env.VERIFIED_POST_MIN_SATS
     }
   })
+
+  it('logs into the wallet-linked account instead of minting a duplicate', async () => {
+    // Wallet account linked to a sub via the link flow...
+    const minted = await json('/v1/accounts/mint', {
+      method: 'POST',
+      body: JSON.stringify({ controllerKey: 'demo-login-link-1', kind: 'human' }),
+    })
+    assert.equal(minted.status, 201)
+    const number = (minted.data.account as { number: number }).number
+    const ch = await json('/v1/auth/challenge', {
+      method: 'POST',
+      body: JSON.stringify({ controllerKey: 'demo-login-link-1' }),
+    })
+    const login = await json('/v1/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        controllerKey: 'demo-login-link-1',
+        challenge: ch.data.challenge,
+        signature: createHash('sha256')
+          .update(`${ch.data.message as string}:demo-login-link-1`)
+          .digest('hex'),
+        accountNumber: number,
+      }),
+    })
+    const token = login.data.token as string
+    const start = await json('/v1/auth/twetch/login', { token })
+    assert.equal(start.data.mode, 'link')
+    const linked = await json('/v1/auth/twetch/complete', {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ code: 'shared-sub-9', state: start.data.state }),
+    })
+    assert.equal(linked.status, 200)
+
+    // ...then Login with Twetch for the same sub lands there, no mint.
+    const done = await loginComplete('shared-sub-9')
+    assert.equal(done.status, 200)
+    assert.equal(done.data.newAccount, false)
+    assert.equal((done.data.account as { number: number }).number, number)
+    const list = await json('/v1/accounts')
+    assert.equal(
+      (list.data.items as unknown[]).filter(
+        (a) =>
+          (a as { twetch?: { sub?: string } }).twetch?.sub ===
+          'twetch-login-shared-sub-9',
+      ).length,
+      1,
+    )
+  })
 })
