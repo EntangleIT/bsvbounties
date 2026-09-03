@@ -19,7 +19,10 @@
     "REQUIRE_POSTER_BOND": "false",
     "REQUIRE_WORKER_BOND": "false",
     "LLM_PROVIDER": "xai",
-    "LLM_MODEL": "grok-3"
+    "LLM_MODEL": "grok-3",
+    "TWETCH_ISSUER": "https://id.entangleit.com",
+    "TWETCH_CLIENT_ID": "twetch_QSYSq_L10xMNERNdB9Dw",
+    "TWETCH_REDIRECT_URI": "https://entangleit.com/twetch-callback"
   },
   "kv_namespaces": [
     {

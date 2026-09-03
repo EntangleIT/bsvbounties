@@ -111,10 +111,11 @@ export function submitWork(
   workHash: string | undefined,
   workUri?: string,
   notes?: string,
+  seal?: unknown,
 ) {
   return request(`/v1/bounties/${id}/submit`, {
     method: 'POST',
-    body: JSON.stringify({ workHash, workUri, notes }),
+    body: JSON.stringify({ workHash, workUri, notes, seal }),
   })
 }
 
@@ -258,6 +259,39 @@ export function updateProfile(
     method: 'PATCH',
     body: JSON.stringify(body),
   })
+}
+
+// --- Twetch verification ("Sign in with Twetch") ---
+
+export function twetchLogin() {
+  return request<{
+    authorizationUrl: string
+    state: string
+    expiresAt: string
+    accountNumber: number
+  }>('/v1/auth/twetch/login')
+}
+
+export function twetchComplete(code: string, state: string) {
+  return request<{ account: Account }>('/v1/auth/twetch/complete', {
+    method: 'POST',
+    body: JSON.stringify({ code, state }),
+  })
+}
+
+export function twetchUnlink() {
+  return request<{ account: Account }>('/v1/auth/twetch/unlink', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function twetchStatus() {
+  return request<{
+    verified: boolean
+    twetch: Account['twetch'] | null
+    configured: boolean
+  }>('/v1/auth/twetch/status')
 }
 
 // --- Auth ---

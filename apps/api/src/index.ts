@@ -10,6 +10,7 @@ import { BountyStore } from './store/bountyStore.js'
 import { AccountStore } from './store/accountStore.js'
 import { BondStore } from './store/bondStore.js'
 import { ChallengeStore, SessionStore } from './store/sessionStore.js'
+import { PendingTwetchStore } from './routes/twetch.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '../../..')
@@ -29,11 +30,13 @@ const accountStore = new AccountStore(DATA_DIR)
 const sessionStore = new SessionStore(DATA_DIR)
 const challengeStore = new ChallengeStore()
 const bondStore = new BondStore(DATA_DIR)
+const twetchPending = new PendingTwetchStore(DATA_DIR)
 
 await bountyStore.init()
 await accountStore.init()
 await sessionStore.init()
 await bondStore.init()
+await twetchPending.init()
 
 const app = createApp({
   publicUrl: PUBLIC_URL,
@@ -47,6 +50,7 @@ const app = createApp({
     challenges: challengeStore,
     bonds: bondStore,
   },
+  twetch: { pending: twetchPending },
 })
 
 console.log(`AI Bounties API listening on http://${HOST}:${PORT}`)

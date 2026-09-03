@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   formatVerificationReason,
+  createSubmitSeal,
+  sha256Hex,
   type AcceptanceKind,
   type Account,
   type Bounty,
@@ -71,10 +73,26 @@ export function App() {
         : Array.from(crypto.getRandomValues(new Uint8Array(32)))
             .map((b) => b.toString(16).padStart(2, '0'))
             .join('')
+      // Sealed bounties: attach a custody envelope binding the same workHash
+      // the server derives, so verification is proof-of-existence, not fetch.
+      const bounty = bounties.find((b) => b.id === id)
+      const sealed = bounty?.acceptance?.kind === 'sealed'
+      const envelope = sealed
+        ? createSubmitSeal({
+            workHash: (hash ?? sha256Hex(workUri)).toLowerCase(),
+            submitter: {
+              controllerKey: account?.controllerKey,
+              accountNumber: account?.number,
+              displayName: account?.displayName,
+            },
+          })
+        : undefined
       const res = (await submitWork(
         id,
         hash,
         workUri || undefined,
+        undefined,
+        envelope,
       )) as {
         autoReleased?: boolean
         verification?: { passed?: boolean; reason?: string; details?: Record<string, unknown>; kind?: string }

@@ -4,6 +4,9 @@ import {
   type Bounty,
   type LlmJudgeInput,
   type LlmJudgeResult,
+  type Rfc3161Stamp,
+  type SealEnvelope,
+  type SealSubmitter,
   type Verification,
 } from '@ai-bounties/shared'
 import type { LlmClient } from '@ai-bounties/llm'
@@ -52,6 +55,10 @@ export async function runBountyVerifier(opts: {
   workHash?: string
   notes?: string
   llm?: LlmClient
+  seal?: SealEnvelope
+  expectedSubmitter?: SealSubmitter
+  /** Platform TSA stamping for `sealed` + requireTimestamp. Defaults to live TSAs. */
+  stamp?: (workHash: string) => Promise<Rfc3161Stamp>
 }): Promise<Verification> {
   return verifyWork(
     {
@@ -62,9 +69,12 @@ export async function runBountyVerifier(opts: {
       requirements: opts.bounty.requirements,
       title: opts.bounty.title,
       description: opts.bounty.description,
+      seal: opts.seal,
+      expectedSubmitter: opts.expectedSubmitter,
     },
     {
       llmJudge: opts.llm ? makeLlmJudge(opts.llm) : undefined,
+      stamp: opts.stamp,
     },
   )
 }

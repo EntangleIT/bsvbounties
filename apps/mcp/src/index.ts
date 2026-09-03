@@ -78,10 +78,10 @@ server.tool(
     useEscrow: z.boolean().optional(),
     arbiter: z.string().optional().describe('"llm" or a pubkey'),
     acceptanceKind: z
-      .enum(['manual', 'http', 'schema', 'command', 'hash', 'llm-judge'])
+      .enum(['manual', 'http', 'schema', 'command', 'hash', 'llm-judge', 'sealed'])
       .optional()
       .describe(
-        'manual | http (JSON APIs) | schema | hash (sha256 of workUri) | llm-judge | command (alias of hash)',
+        'manual | http (JSON APIs) | schema | hash (sha256 of workUri) | llm-judge | command (alias of hash) | sealed (custody envelope + optional TSA timestamp)',
       ),
     acceptanceRubric: z
       .string()

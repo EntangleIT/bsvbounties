@@ -75,6 +75,12 @@ export class AccountStore {
       .map(normalizeAccount)
   }
 
+  /** The account verified by a Twetch `sub`, if any (subs are unique). */
+  getByTwetchSub(sub: string): Account | undefined {
+    const a = this.accounts.find((row) => row.twetch?.sub === sub)
+    return a ? normalizeAccount(a) : undefined
+  }
+
   isNumberTaken(n: number): boolean {
     return this.accounts.some((a) => a.number === n)
   }
@@ -171,6 +177,9 @@ export class AccountStore {
       transferTxid: opts?.transferTxid,
       listPriceSats: opts?.clearListing === false ? undefined : null,
       listedAt: opts?.clearListing === false ? undefined : null,
+      // Identity does not transfer: the buyer links their own Twetch.
+      // Reputation stats stay with the number.
+      twetch: undefined,
     })
   }
 

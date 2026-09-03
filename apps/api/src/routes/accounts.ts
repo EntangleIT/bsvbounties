@@ -60,6 +60,29 @@ export function accountRoutes(
   })
 
   /**
+   * Deterministic leaderboard (Trust C): accounts ranked by reputation
+   * score. No LLM involved — this is the cheap ground truth that
+   * POST /v1/llm/rank-workers refines with skills matching.
+   */
+  app.get('/leaderboard', (c) => {
+    const kind = c.req.query('kind') as AccountKind | undefined
+    const limit = Math.min(Number(c.req.query('limit') ?? 20), 100)
+    const items = accounts
+      .list({ kind, limit: 1000 })
+      .map((a) => ({ ...a, reputation: reputationOf(a) }))
+      .sort(
+        (x, y) =>
+          y.reputation.score - x.reputation.score || x.number - y.number,
+      )
+      .slice(0, Number.isFinite(limit) && limit > 0 ? limit : 20)
+    return c.json({
+      items,
+      total: items.length,
+      scoredAt: new Date().toISOString(),
+    })
+  })
+
+  /**
    * Mint next sequential account (or preferred free number).
    */
   app.post('/mint', async (c) => {

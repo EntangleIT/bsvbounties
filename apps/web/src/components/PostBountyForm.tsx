@@ -20,8 +20,9 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
   const [amountSats, setAmountSats] = useState(10000)
   const [idea, setIdea] = useState('')
   const [acceptKind, setAcceptKind] = useState<
-    'manual' | 'http' | 'hash' | 'llm-judge'
+    'manual' | 'http' | 'hash' | 'llm-judge' | 'sealed'
   >('manual')
+  const [sealedTimestamp, setSealedTimestamp] = useState(false)
   const [jsonPath, setJsonPath] = useState('ok')
   const [expectValue, setExpectValue] = useState('true')
   const [checkUrl, setCheckUrl] = useState('')
@@ -91,6 +92,7 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
     setBusy(true)
     setError(null)
     setMessage(null)
+    let createdId: string | null = null
     try {
       const wallet = await ensureYoursConnected()
       await ensurePosterSession()
@@ -119,7 +121,12 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
                   kind: 'llm-judge' as const,
                   ...(llmRubric.trim() ? { rubric: llmRubric.trim() } : {}),
                 }
-              : { kind: 'manual' as const }
+              : acceptKind === 'sealed'
+                ? {
+                    kind: 'sealed' as const,
+                    ...(sealedTimestamp ? { requireTimestamp: true } : {}),
+                  }
+                : { kind: 'manual' as const }
 
       const milestones =
         splits > 1
@@ -142,12 +149,30 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
       })
 
       if (created.createActionTemplate) {
-        const result = await wallet.createAction(created.createActionTemplate)
-        if (result.txid) {
-          await attachEscrow(created.bounty.id, result.txid)
-          setMessage(`Posted on-chain. txid=${result.txid}`)
-        } else {
-          setMessage('Bounty created; Yours Wallet did not return a txid yet.')
+        // First post ever triggers several one-time Yours grants (basket +
+        // labels); they persist per origin, so later posts skip them. Say so
+        // up front — a silent multi-prompt sequence reads as broken.
+        setMessage(
+          'Bounty created. Check Yours Wallet: approve the access requests (one-time setup), then review the funding signature — or deny it to leave the bounty open and unfunded.',
+        )
+        try {
+          const result = await wallet.createAction(
+            created.createActionTemplate,
+          )
+          if (result.txid) {
+            await attachEscrow(created.bounty.id, result.txid)
+            setMessage(`Posted on-chain. txid=${result.txid}`)
+          } else {
+            setMessage(
+              `Bounty ${created.bounty.id.slice(0, 8)}… created; Yours Wallet did not return a txid yet.`,
+            )
+          }
+        } catch (wErr) {
+          // Funding denied/failed: the bounty already exists server-side —
+          // say so instead of leaving the board stale.
+          setMessage(
+            `Bounty ${created.bounty.id.slice(0, 8)}… created, but wallet funding was skipped (${wErr instanceof Error ? wErr.message : String(wErr)}). It is open and unfunded.`,
+          )
         }
       } else {
         setMessage(
@@ -155,14 +180,16 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
         )
       }
 
+      createdId = created.bounty.id
       setTitle('')
       setDescription('')
       setIdea('')
-      onCreated()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (!createdId) setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
+      // Always re-fetch: a denied/failed wallet step must not leave a stale board.
+      onCreated()
     }
   }
 
@@ -239,7 +266,12 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
             value={acceptKind}
             onChange={(e) =>
               setAcceptKind(
-                e.target.value as 'manual' | 'http' | 'hash' | 'llm-judge',
+                e.target.value as
+                  | 'manual'
+                  | 'http'
+                  | 'hash'
+                  | 'llm-judge'
+                  | 'sealed',
               )
             }
           >
@@ -247,6 +279,7 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
             <option value="hash">Hash of file (auto-pay)</option>
             <option value="http">HTTP JSON API (auto-pay)</option>
             <option value="llm-judge">LLM judge (auto-pay)</option>
+            <option value="sealed">Sealed proof (auto-pay)</option>
           </select>
         </label>
         <label>
@@ -268,6 +301,18 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
           auto-pays on match. Prefer a direct download/export link over a Drive
           share page.
         </p>
+      )}
+
+      {acceptKind === 'sealed' && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={sealedTimestamp}
+            onChange={(e) => setSealedTimestamp(e.target.checked)}
+          />
+          Require trusted timestamp (RFC 3161 — platform stamps if the worker
+          has none; TSA outages fail soft, work stays submitted)
+        </label>
       )}
 
       {acceptKind === 'llm-judge' && (

@@ -41,6 +41,15 @@ OP_FALSE OP_RETURN
 
 - **Number** — sequential site identity (`#1`, `#33`, …). Sticky reputation.
 - **Controller key** — BRC-100 identity key (or demo key). Proves control of the account.
+- **Twetch verification (Trust A)** — optional OIDC link (`Account.twetch`,
+  `sub` = stable Twetch user id, one sub per account, cleared on transfer).
+  High-value posts can require it (`VERIFIED_POST_MIN_SATS`). See `docs/TWETCH.md`.
+- **Reputation score (Trust C)** — deterministic 0–1000 computed at read
+  time from stats (no migration, no LLM): base 500 provisional +
+  completions + confidence-scaled pass-rate − slashes ± latency + Twetch
+  bonus. Tiers S/A/B/C/D with per-part contributions. Served on every
+  account payload as `reputation`, ranked at `GET /v1/accounts/leaderboard`,
+  and fed to `POST /v1/llm/rank-workers` as `suggestedOrder` ground truth.
 - **1-sat token** — mint createAction template creates a 1-sat output + OP_RETURN. Full 1Sat Ordinal inscription can replace this later without changing account numbers.
 - **Transfer / sale** — change `controllerKey`; history stays on the number. Marketplace listing is app-indexed in Phase 2 (atomic swap in later phase).
 
@@ -101,6 +110,7 @@ Job bodies still live off-chain. `acceptance` is committed in `contentHash`.
 | `hash` | Re-fetch `workUri` (follow redirects), reject HTML viewers, SHA-256 body must match `workHash` / `expectedHash` |
 | `command` | Deprecated alias of `hash` |
 | `llm-judge` | LLM scores the artifact vs `requirements` + optional `rubric`/`prompt`; pass auto-releases |
+| `sealed` | Worker attaches a `seal` envelope (hash-chained custody + optional RFC 3161 token). Artifact is **never fetched** — proof is existence + provenance. Pass auto-releases. See `docs/SEALED.md`. |
 
 Non-manual pass **auto-approves** escrow (`asVerifier`). Fail (and LLM outage/credits) stays `submitted` for resubmit.
 

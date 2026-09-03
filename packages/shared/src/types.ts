@@ -5,6 +5,9 @@ import type {
   MilestoneInput,
   Verification,
 } from './acceptance.js'
+import type { Rfc3161Stamp, SealEnvelope } from './seal.js'
+
+export type { Rfc3161Stamp, SealEnvelope } from './seal.js'
 
 export type {
   AcceptanceSpec,
@@ -94,6 +97,8 @@ export interface Bounty {
   settleTxid?: string
   workHash?: string
   workUri?: string
+  /** Trust B: sealed-submission envelope (custody proof + timestamps). */
+  seal?: SealEnvelope
   /** Phase 3 escrow covenant metadata */
   escrow?: BountyEscrowMeta
   /** Machine-checkable acceptance (default manual). */
@@ -137,6 +142,8 @@ export interface SubmitWorkInput {
   notes?: string
   submitTxid?: string
   milestoneIndex?: number
+  /** Trust B: sealed-submission envelope from createSubmitSeal(). */
+  seal?: SealEnvelope
 }
 
 export interface SettleBountyInput {

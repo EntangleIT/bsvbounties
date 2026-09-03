@@ -17,6 +17,14 @@ import { accountRoutes } from './routes/accounts.js'
 import { authRoutes } from './routes/auth.js'
 import { bondRoutes } from './routes/bonds.js'
 import { llmRoutes } from './routes/llm.js'
+import {
+  twetchConfigFromEnv,
+  twetchRoutes,
+  type PendingTwetchStore,
+  type TwetchExchangeFn,
+  type TwetchRpConfig,
+  type TwetchVerifyFn,
+} from './routes/twetch.js'
 import { buildAgentCard, buildOpenApi } from './openapi.js'
 
 export type AppStores = {
@@ -35,6 +43,17 @@ export type CreateAppConfig = {
   stores: AppStores
   /** Mount API under a prefix (e.g. `/bsvbounties` on Cloudflare). */
   basePath?: string
+  /**
+   * Twetch OIDC relying-party overrides. `config` defaults to env
+   * (TWETCH_ISSUER / TWETCH_CLIENT_ID / TWETCH_REDIRECT_URI); explicit
+   * null disables the endpoints. Exchange/verify injection is for tests.
+   */
+  twetch?: {
+    config?: TwetchRpConfig | null
+    pending?: PendingTwetchStore
+    exchangeCode?: TwetchExchangeFn
+    verifyIdToken?: TwetchVerifyFn
+  }
 }
 
 function scryptArtifactSafe(): boolean {
@@ -60,6 +79,11 @@ export function createApp(config: CreateAppConfig): Hono {
     }),
   )
 
+  const twetchCfg =
+    config.twetch?.config !== undefined
+      ? config.twetch.config
+      : twetchConfigFromEnv()
+
   inner.get('/health', (c) =>
     c.json({
       ok: true,
@@ -78,6 +102,7 @@ export function createApp(config: CreateAppConfig): Hono {
       requirePosterBond: process.env.REQUIRE_POSTER_BOND === 'true',
       requireWorkerBond: process.env.REQUIRE_WORKER_BOND === 'true',
       authMode: process.env.AUTH_MODE ?? 'both',
+      twetchConfigured: twetchCfg != null,
       mcp: `${config.publicUrl.replace(/\/$/, '')} → run apps/mcp (stdio)`,
     }),
   )
@@ -147,6 +172,17 @@ export function createApp(config: CreateAppConfig): Hono {
   )
   inner.route('/v1/accounts', accountRoutes(accounts, sessions, config.network))
   inner.route('/v1/auth', authRoutes(accounts, sessions, challenges))
+  inner.route(
+    '/v1/auth/twetch',
+    twetchRoutes({
+      accounts,
+      sessions,
+      config: twetchCfg,
+      pending: config.twetch?.pending,
+      exchangeCode: config.twetch?.exchangeCode,
+      verifyIdToken: config.twetch?.verifyIdToken,
+    }),
+  )
   inner.route('/v1/bonds', bondRoutes(bonds, sessions, config.network))
   inner.route('/v1/llm', llmRoutes(bounties, accounts, config.llm))
 

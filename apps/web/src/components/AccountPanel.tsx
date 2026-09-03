@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Account } from '@ai-bounties/shared'
+import type { Account, AccountReputation } from '@ai-bounties/shared'
 import {
   authChallenge,
   authLogin,
@@ -13,6 +13,9 @@ import {
   mintAccount,
   setAuthToken,
   transferAccount,
+  twetchComplete,
+  twetchLogin,
+  twetchUnlink,
   updateProfile,
 } from '../lib/api'
 import { ensureYoursConnected } from '../lib/wallet'
@@ -21,7 +24,7 @@ export function AccountPanel({
   account,
   onAccountChange,
 }: {
-  account: Account | null
+  account: (Account & { reputation?: AccountReputation }) | null
   onAccountChange: (a: Account | null) => void
 }) {
   const [displayName, setDisplayName] = useState('')
@@ -30,7 +33,9 @@ export function AccountPanel({
   const [preferred, setPreferred] = useState('')
   const [listPrice, setListPrice] = useState(10_000_000)
   const [transferTo, setTransferTo] = useState('')
-  const [marketplace, setMarketplace] = useState<Account[]>([])
+  const [marketplace, setMarketplace] = useState<
+    Array<Account & { reputation?: AccountReputation }>
+  >([])
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -46,6 +51,29 @@ export function AccountPanel({
     }
     void refreshMarket()
   }, [onAccountChange])
+
+  // Twetch OIDC callback: issuer redirects here with ?code&state after the
+  // user approves. Complete the link, then clean the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('code')
+    const state = params.get('state')
+    if (!code || !state || !getAuthToken()) return
+    window.history.replaceState(null, '', window.location.pathname)
+    setBusy(true)
+    twetchComplete(code, state)
+      .then((r) => {
+        onAccountChange(r.account)
+        setMsg(
+          r.account.twetch?.handle
+            ? `Verified as @${r.account.twetch.handle} ✓`
+            : 'Twetch verified ✓',
+        )
+      })
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (account) {
@@ -141,6 +169,33 @@ export function AccountPanel({
       const proof = await proveWallet()
       const a = await loginWithProof(proof)
       setMsg(`Logged in as #${a.number}`)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onVerifyTwetch() {
+    setBusy(true)
+    setErr(null)
+    setMsg(null)
+    try {
+      const { authorizationUrl } = await twetchLogin()
+      window.location.href = authorizationUrl
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+    }
+  }
+
+  async function onUnlinkTwetch() {
+    setBusy(true)
+    setErr(null)
+    try {
+      const res = await twetchUnlink()
+      onAccountChange(res.account)
+      setMsg('Twetch verification removed')
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
@@ -271,11 +326,45 @@ export function AccountPanel({
                 ).toFixed(0)}%`}
               {account.stats.slashes > 0 && ` · slashes ${account.stats.slashes}`}
             </div>
+            {account.reputation != null && (
+              <div className="muted small">
+                reputation {account.reputation.score} ({account.reputation.tier}
+                {account.reputation.provisional ? ' · provisional' : ''})
+              </div>
+            )}
             {account.listPriceSats != null && account.listPriceSats > 0 && (
               <div className="listed">
                 For sale: {account.listPriceSats.toLocaleString()} sats
               </div>
             )}
+            <div className="muted small">
+              {account.twetch?.sub ? (
+                <>
+                  ✓ Twetch verified
+                  {account.twetch.handle ? ` as @${account.twetch.handle}` : ''}
+                  {' · '}
+                  <button
+                    type="button"
+                    className="chip"
+                    disabled={busy}
+                    onClick={() => void onUnlinkTwetch()}
+                    title="Remove Twetch verification"
+                  >
+                    Unlink
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="chip"
+                  disabled={busy}
+                  onClick={() => void onVerifyTwetch()}
+                  title="Verify with your Twetch account (one Twetch id per account)"
+                >
+                  Verify with Twetch
+                </button>
+              )}
+            </div>
           </div>
           <button type="button" className="btn secondary slim" onClick={onLogout}>
             Log out
@@ -393,11 +482,13 @@ export function AccountPanel({
         <p className="muted small">No accounts listed.</p>
       ) : (
         <ul className="market-list">
-          {marketplace.map((a) => (
+            {marketplace.map((a) => (
             <li key={a.number}>
               <span>
                 <strong>#{a.number}</strong> {a.displayName} —{' '}
                 {a.listPriceSats?.toLocaleString()} sats
+                {a.reputation != null &&
+                  ` · ★${a.reputation.score}${a.reputation.tier}`}
               </span>
               {(!account || account.number !== a.number) && (
                 <button

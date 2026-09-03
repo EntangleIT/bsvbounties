@@ -11,6 +11,7 @@ export type AcceptanceKind =
   | 'command'
   | 'hash'
   | 'llm-judge'
+  | 'sealed'
 
 export interface ManualAcceptance {
   kind: 'manual'
@@ -65,6 +66,23 @@ export interface LlmJudgeAcceptance {
   passScore?: number
 }
 
+/**
+ * Sealed submission (Trust B): the worker attaches a hash-chained custody
+ * envelope proving existence + provenance. The artifact itself is never
+ * fetched, so private/encrypted/offline work can still be proven.
+ * Pair with `hash`/`llm-judge` milestones for content inspection.
+ */
+export interface SealedAcceptance {
+  kind: 'sealed'
+  /** If omitted, compared to the submitted workHash. */
+  expectedHash?: string
+  /**
+   * When true, a bound RFC 3161 token is required. The platform requests
+   * one at verify time if the envelope lacks it (`stampedBy: platform`).
+   */
+  requireTimestamp?: boolean
+}
+
 export type AcceptanceSpec =
   | ManualAcceptance
   | HttpAcceptance
@@ -72,12 +90,14 @@ export type AcceptanceSpec =
   | CommandAcceptance
   | HashAcceptance
   | LlmJudgeAcceptance
+  | SealedAcceptance
 
 /** Reasons that are service/waiting states — not cryptographic verify failures. */
 export const SOFT_VERIFY_REASONS = new Set([
   'manual_approval_required',
   'llm_unavailable',
   'llm_credits_exhausted',
+  'timestamp_unavailable',
 ])
 
 export function isSoftVerification(v: Pick<Verification, 'passed' | 'reason'>): boolean {
@@ -128,6 +148,7 @@ export function parseAcceptance(raw: unknown): AcceptanceSpec {
     kind === 'command' ||
     kind === 'hash' ||
     kind === 'llm-judge' ||
+    kind === 'sealed' ||
     kind === 'manual'
   ) {
     return raw as AcceptanceSpec
@@ -357,6 +378,23 @@ export function formatVerificationReason(
       return 'Response body did not match the required pattern.'
     case 'hash_mismatch':
       return 'SHA-256 of fetched workUri did not match submitted workHash.'
+    case 'seal_missing':
+      return 'Sealed bounty needs a custody envelope. Submit with a seal from createSubmitSeal({ workHash, submitter }).'
+    case 'seal_hash_mismatch':
+    case 'seal_event_hash_mismatch':
+    case 'seal_stamp_hash_mismatch':
+      return 'Seal envelope does not bind the submitted work hash. Re-seal the exact bytes you delivered.'
+    case 'seal_broken_link':
+    case 'seal_bad_token':
+    case 'seal_bad_version':
+    case 'seal_bad_work_hash':
+    case 'seal_bad_genesis':
+    case 'seal_empty_chain':
+      return 'Seal envelope failed structural verification (tamper-evident chain broken). Re-seal and resubmit.'
+    case 'seal_actor_mismatch':
+      return 'Seal submitter does not match your logged-in account. Seal with your own key.'
+    case 'timestamp_unavailable':
+      return 'Trusted timestamping is temporarily unreachable; work stays submitted — resubmit later or ask the poster to approve.'
     default:
       return v.reason.replace(/_/g, ' ')
   }

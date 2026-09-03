@@ -12,6 +12,7 @@ import {
   initMilestones,
   isAutoRelease,
   isSoftVerification,
+  isVerifiedAccount,
   parseAcceptance,
   sha256Hex,
   validateMilestones,
@@ -21,6 +22,9 @@ import {
   type BountyEscrowMeta,
   type Milestone,
   type Network,
+  type Rfc3161Stamp,
+  type SealEnvelope,
+  type SealSubmitter,
 } from '@ai-bounties/shared'
 import {
   applyTransition,
@@ -49,7 +53,15 @@ import { runBountyVerifier, runLlmArbiter } from '../verifyFlow.js'
 
 const acceptanceSchema = z
   .object({
-    kind: z.enum(['manual', 'http', 'schema', 'command', 'hash', 'llm-judge']),
+    kind: z.enum([
+      'manual',
+      'http',
+      'schema',
+      'command',
+      'hash',
+      'llm-judge',
+      'sealed',
+    ]),
   })
   .passthrough()
 
@@ -90,6 +102,49 @@ const claimSchema = z.object({
   workerLockingScriptHex: z.string().optional(),
 })
 
+/** Trust B: sealed-submission envelope. Deep validation happens in verifySealed (fail closed). */
+const sealSchema = z
+  .object({
+    version: z.number(),
+    workHash: z.string(),
+    submitter: z
+      .object({
+        controllerKey: z.string().optional(),
+        accountNumber: z.number().optional(),
+        displayName: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    events: z.array(
+      z
+        .object({
+          prevHash: z.string(),
+          type: z.string(),
+          at: z.string(),
+          actorId: z.string(),
+          actorName: z.string(),
+          contentHash: z.string(),
+          meta: z.record(z.string()).optional(),
+          eventHash: z.string(),
+        })
+        .passthrough(),
+    ),
+    rfc3161: z
+      .object({
+        tsa: z.string(),
+        tsaUrl: z.string(),
+        hashedMessage: z.string(),
+        genTime: z.string(),
+        tokenB64: z.string(),
+        serial: z.string(),
+        status: z.number(),
+      })
+      .passthrough()
+      .optional(),
+    anchorTxid: z.string().optional(),
+  })
+  .passthrough()
+
 const submitSchema = z
   .object({
     workHash: z.string().min(16).optional(),
@@ -97,8 +152,9 @@ const submitSchema = z
     notes: z.string().max(4000).optional(),
     submitTxid: z.string().optional(),
     milestoneIndex: z.number().int().nonnegative().optional(),
+    seal: sealSchema.optional(),
   })
-  .refine((d) => Boolean(d.workHash || d.workUri || d.notes), {
+  .refine((d) => Boolean(d.workHash || d.workUri || d.notes || d.seal), {
     message: 'workHash_or_workUri_required',
   })
 
@@ -266,6 +322,25 @@ export function bountyRoutes(
           note: 'Account ownership changed. Log in again.',
         },
         401,
+      )
+    }
+
+    // Sybil gate: high-value posts require a Twetch-verified account.
+    // Inactive unless VERIFIED_POST_MIN_SATS is set to a finite number.
+    const verifiedMinRaw = (process.env.VERIFIED_POST_MIN_SATS ?? '').trim()
+    const verifiedMin = verifiedMinRaw === '' ? NaN : Number(verifiedMinRaw)
+    if (
+      Number.isFinite(verifiedMin) &&
+      body.amountSats >= verifiedMin &&
+      !isVerifiedAccount(owned)
+    ) {
+      return c.json(
+        {
+          error: 'needs_verification',
+          thresholdSats: verifiedMin,
+          note: 'Bounties at or above this value require a Twetch-verified account. Link one via GET /v1/auth/twetch/login → POST /v1/auth/twetch/complete.',
+        },
+        403,
       )
     }
 
@@ -711,10 +786,20 @@ export function bountyRoutes(
         defaultAcceptance())
       : (existing.acceptance ?? defaultAcceptance())
 
+    // Authenticated submitter (when present) binds the seal envelope to them.
+    const submitSession = sessions
+      ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+      : undefined
+    const seal = body.seal as unknown as SealEnvelope | undefined
+    const expectedSubmitter = submitSession
+      ? {
+          controllerKey: submitSession.controllerKey,
+          accountNumber: submitSession.accountNumber,
+        }
+      : undefined
+
     if (existing.escrow) {
-      const session = sessions
-        ? getSessionFromRequest(sessions, c.req.header('Authorization'))
-        : undefined
+      const session = submitSession
       const signer =
         session?.controllerKey ??
         existing.workerPubKey ??
@@ -736,6 +821,7 @@ export function bountyRoutes(
         milestoneIndex,
         spec,
         action,
+        { seal, expectedSubmitter },
       )
       return c.json(afterSubmit)
     }
@@ -747,6 +833,7 @@ export function bountyRoutes(
       status: 'submitted',
       workHash,
       workUri: body.workUri,
+      seal,
     })
     const afterSubmit = await finishSubmit(
       existing.id,
@@ -759,6 +846,7 @@ export function bountyRoutes(
         bounty: store.get(existing.id)!,
         labels: [BRC100_LABELS.app, BRC100_LABELS.submit],
       },
+      { seal, expectedSubmitter },
     )
     return c.json(afterSubmit)
   })
@@ -771,6 +859,10 @@ export function bountyRoutes(
     milestoneIndex: number,
     spec: AcceptanceSpec,
     action: Record<string, unknown> & { bounty?: Bounty },
+    submit?: {
+      seal?: SealEnvelope
+      expectedSubmitter?: SealSubmitter
+    },
   ) {
     let bounty = store.get(bountyId)!
     let milestones = bounty.milestones ? [...bounty.milestones] : undefined
@@ -791,7 +883,19 @@ export function bountyRoutes(
       workHash,
       notes,
       llm,
+      seal: submit?.seal,
+      expectedSubmitter: submit?.expectedSubmitter,
     })
+
+    // Platform-stamped token (sealed + requireTimestamp, worker supplied
+    // none): persist it so the envelope stays independently verifiable.
+    let seal = submit?.seal
+    const stamped = (
+      verification.details as { stamp?: Rfc3161Stamp } | undefined
+    )?.stamp
+    if (stamped && seal && !seal.rfc3161) {
+      seal = { ...seal, rfc3161: stamped }
+    }
 
     // Pass → paid. Soft waits (manual / LLM outage) and hard verify fails stay
     // "submitted" so the worker can resubmit or the poster can approve — never
@@ -843,6 +947,7 @@ export function bountyRoutes(
     const updated = await store.update(bountyId, {
       workUri,
       workHash,
+      seal,
       lastVerification: verification,
       milestones,
       releasedSats,

@@ -36,7 +36,9 @@ export function BountyCard({
       ? 'JSON API URL — not Drive/PNG (use hash or llm-judge bounties for files)'
       : acceptKind === 'hash'
         ? 'Direct file URL (sha256 must match); Drive share pages are rejected'
-        : 'https://… (Drive, GitHub, image, gist)'
+        : acceptKind === 'sealed'
+          ? 'Work reference (URI, notes, or hash) — proof is sealed, content stays private'
+          : 'https://… (Drive, GitHub, image, gist)'
 
   return (
     <article className="card">
@@ -52,6 +54,14 @@ export function BountyCard({
         {bounty.escrow && (
           <span className="badge escrow" title="Phase 3 escrow">
             escrow {ESCROW_STATE[bounty.escrow.state] ?? bounty.escrow.state}
+          </span>
+        )}
+        {bounty.seal && (
+          <span
+            className="badge escrow"
+            title={`Sealed ${bounty.seal.rfc3161 ? `· TSA ${bounty.seal.rfc3161.tsa} ${bounty.seal.rfc3161.genTime}` : '· custody chain'} · tip ${bounty.seal.events[bounty.seal.events.length - 1]?.eventHash.slice(0, 8)}…`}
+          >
+            ◈ sealed{bounty.seal.rfc3161 ? ' + TSA' : ''}
           </span>
         )}
         <span className="amount">{satsLabel(bounty.amountSats)}</span>

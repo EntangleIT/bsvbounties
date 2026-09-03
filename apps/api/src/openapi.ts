@@ -55,6 +55,17 @@ export function buildOpenApi(publicUrl: string) {
           responses: { '200': { description: 'Listings' } },
         },
       },
+      '/v1/accounts/leaderboard': {
+        get: {
+          operationId: 'leaderboard',
+          summary: 'Accounts ranked by deterministic reputation score (Trust C)',
+          parameters: [
+            { name: 'kind', in: 'query', schema: { type: 'string' } },
+            { name: 'limit', in: 'query', schema: { type: 'integer' } },
+          ],
+          responses: { '200': { description: 'Ranked accounts' } },
+        },
+      },
       '/v1/accounts/{number}/list': {
         post: {
           operationId: 'listAccountForSale',
@@ -88,6 +99,34 @@ export function buildOpenApi(publicUrl: string) {
           operationId: 'authMe',
           summary: 'Current session + account',
           responses: { '200': { description: 'Session' } },
+        },
+      },
+      '/v1/auth/twetch/login': {
+        get: {
+          operationId: 'twetchLogin',
+          summary: 'Start Twetch link flow (auth required, returns OIDC URL)',
+          responses: { '200': { description: 'Authorization URL + state' } },
+        },
+      },
+      '/v1/auth/twetch/complete': {
+        post: {
+          operationId: 'twetchComplete',
+          summary: 'Complete Twetch link with authorization code (auth required)',
+          responses: { '200': { description: 'Verified account' } },
+        },
+      },
+      '/v1/auth/twetch/unlink': {
+        post: {
+          operationId: 'twetchUnlink',
+          summary: 'Remove Twetch verification (auth required)',
+          responses: { '200': { description: 'Account' } },
+        },
+      },
+      '/v1/auth/twetch/status': {
+        get: {
+          operationId: 'twetchStatus',
+          summary: 'Twetch verification state (auth required)',
+          responses: { '200': { description: 'Status' } },
         },
       },
       '/v1/bounties': {

@@ -10,6 +10,7 @@ import { BondStore } from './store/bondStore.js'
 import { BountyStore } from './store/bountyStore.js'
 import { kvPersist } from './store/persist.js'
 import { ChallengeStore, SessionStore } from './store/sessionStore.js'
+import { PendingTwetchStore } from './routes/twetch.js'
 
 const PREFIX = '/bsvbounties'
 
@@ -31,6 +32,11 @@ const ENV_KEYS = [
   'LLM_PROVIDER',
   'LLM_MODEL',
   'LLM_BASE_URL',
+  'TWETCH_ISSUER',
+  'TWETCH_CLIENT_ID',
+  'TWETCH_CLIENT_SECRET',
+  'TWETCH_REDIRECT_URI',
+  'VERIFIED_POST_MIN_SATS',
   'XAI_API_KEY',
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
@@ -67,6 +73,9 @@ function toAssetRequest(request: Request): Request {
 async function handleApi(request: Request, env: Env): Promise<Response> {
   applyEnv(env)
   const kv = env.AI_BOUNTIES
+  const twetchPending = new PendingTwetchStore(
+    kvPersist(kv, 'twetch-pending.json'),
+  )
   const stores = {
     bounties: new BountyStore(kvPersist(kv, 'bounties.json')),
     accounts: new AccountStore(kvPersist(kv, 'accounts.json')),
@@ -80,6 +89,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     stores.sessions.init(),
     stores.challenges.init(),
     stores.bonds.init(),
+    twetchPending.init(),
   ])
   const publicUrl = env.PUBLIC_URL || `https://entangleit.com${PREFIX}`
   const app = createApp({
@@ -94,6 +104,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     llm: createLlmFromEnv(),
     stores,
     basePath: PREFIX,
+    twetch: { pending: twetchPending },
   })
   return app.fetch(request)
 }
