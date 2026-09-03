@@ -11,7 +11,9 @@ import {
   getMarketplace,
   listAccountForSale,
   mintAccount,
+  saveTwetchOAuthState,
   setAuthToken,
+  takeTwetchOAuthState,
   transferAccount,
   twetchComplete,
   twetchLogin,
@@ -52,23 +54,35 @@ export function AccountPanel({
     void refreshMarket()
   }, [onAccountChange])
 
-  // Twetch OIDC callback: issuer redirects here with ?code&state after the
-  // user approves. Complete the link, then clean the URL.
+  // Twetch OIDC callback: the issuer redirects back with ?code&state.
+  // Logged in -> link the identity. Logged out -> Login with Twetch
+  // (find-or-mint by sub, open a session). Then clean the URL.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const code = params.get('code')
     const state = params.get('state')
-    if (!code || !state || !getAuthToken()) return
+    if (!code || !state) return
     window.history.replaceState(null, '', window.location.pathname)
+    const expected = takeTwetchOAuthState()
+    if (expected && expected !== state) {
+      setErr('Twetch login expired or was tampered with — please try again.')
+      return
+    }
+    const loggedIn = Boolean(getAuthToken())
     setBusy(true)
     twetchComplete(code, state)
       .then((r) => {
+        const handle = r.account.twetch?.handle
+        if (!loggedIn && r.token) {
+          setAuthToken(r.token)
+          setMsg(
+            `Signed in with Twetch${handle ? ` as @${handle}` : ''} ✓` +
+              (r.newAccount ? ` — new account #${r.account.number} minted` : ''),
+          )
+        } else {
+          setMsg(handle ? `Verified as @${handle} ✓` : 'Twetch verified ✓')
+        }
         onAccountChange(r.account)
-        setMsg(
-          r.account.twetch?.handle
-            ? `Verified as @${r.account.twetch.handle} ✓`
-            : 'Twetch verified ✓',
-        )
       })
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -181,7 +195,22 @@ export function AccountPanel({
     setErr(null)
     setMsg(null)
     try {
-      const { authorizationUrl } = await twetchLogin()
+      const { authorizationUrl, state } = await twetchLogin()
+      saveTwetchOAuthState(state)
+      window.location.href = authorizationUrl
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+    }
+  }
+
+  async function onLoginWithTwetch() {
+    setBusy(true)
+    setErr(null)
+    setMsg(null)
+    try {
+      const { authorizationUrl, state } = await twetchLogin()
+      saveTwetchOAuthState(state)
       window.location.href = authorizationUrl
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -374,6 +403,15 @@ export function AccountPanel({
         <div className="row-actions">
           <button type="button" className="btn secondary" disabled={busy} onClick={onLogin}>
             Log in
+          </button>
+          <button
+            type="button"
+            className="btn secondary"
+            disabled={busy}
+            onClick={() => void onLoginWithTwetch()}
+            title="Sign in with your Twetch account — no wallet needed"
+          >
+            Login with Twetch
           </button>
         </div>
       )}

@@ -214,7 +214,8 @@ describe('Twetch verified accounts', () => {
       method: 'POST',
       body: JSON.stringify({ code: 'code-x', state: 'nope-not-real' }),
     })
-    assert.equal(anon.status, 401)
+    assert.equal(anon.status, 400)
+    assert.equal(anon.data.error, 'invalid_state')
 
     const { token } = await mintAndLogin('demo-twetch-d')
     const wrong = await json('/v1/auth/twetch/complete', {
@@ -224,9 +225,28 @@ describe('Twetch verified accounts', () => {
     })
     assert.equal(wrong.status, 400)
     assert.equal(wrong.data.error, 'invalid_state')
+  })
 
+  it('starts login-intent flows without a session', async () => {
     const anonLogin = await json('/v1/auth/twetch/login')
-    assert.equal(anonLogin.status, 401)
+    assert.equal(anonLogin.status, 200)
+    assert.equal(anonLogin.data.mode, 'login')
+    assert.ok((anonLogin.data.authorizationUrl as string).startsWith(`${ISSUER}/auth?`))
+    assert.equal(anonLogin.data.accountNumber, undefined)
+  })
+
+  it('link-intent pending requires its session', async () => {
+    const { token } = await mintAndLogin('demo-twetch-link-intent')
+    const login = await json('/v1/auth/twetch/login', { token })
+    assert.equal(login.status, 200)
+    assert.equal(login.data.mode, 'link')
+    // Same pending completed anonymously must fail.
+    const anon = await json('/v1/auth/twetch/complete', {
+      method: 'POST',
+      body: JSON.stringify({ code: 'auth-code-9', state: login.data.state }),
+    })
+    assert.equal(anon.status, 400)
+    assert.equal(anon.data.error, 'invalid_state')
   })
 
   it('unlinks identity and frees the sub', async () => {
@@ -348,5 +368,150 @@ describe('Twetch verified accounts', () => {
       unknown
     >
     assert.equal(health.twetchConfigured, false)
+  })
+})
+
+describe('Login with Twetch', () => {
+  let app: ReturnType<typeof createApp>
+  let origFetch: typeof fetch
+
+  before(async () => {
+    delete process.env.TWETCH_ISSUER
+    delete process.env.TWETCH_CLIENT_ID
+    process.env.AUTH_MODE = 'both'
+    process.env.ESCROW_MODE = 'app'
+    process.env.REQUIRE_POSTER_BOND = 'false'
+    process.env.REQUIRE_WORKER_BOND = 'false'
+
+    origFetch = globalThis.fetch
+    globalThis.fetch = (async (url: unknown) => {
+      if (String(url).endsWith('/.well-known/openid-configuration')) {
+        return new Response(JSON.stringify(DISCOVERY), { status: 200 })
+      }
+      throw new Error(`unexpected fetch ${String(url)}`)
+    }) as typeof fetch
+
+    const accounts = new AccountStore(memoryPersist())
+    const sessions = new SessionStore(memoryPersist())
+    const challenges = new ChallengeStore(memoryPersist())
+    const bonds = new BondStore(memoryPersist())
+    const bounties = new BountyStore(memoryPersist())
+    const pending = new PendingTwetchStore(memoryPersist())
+    await Promise.all([
+      accounts.init(),
+      sessions.init(),
+      challenges.init(),
+      bonds.init(),
+      bounties.init(),
+      pending.init(),
+    ])
+    app = createApp({
+      publicUrl: 'http://localhost:8787',
+      webOrigins: ['http://localhost:5173'],
+      network: 'test',
+      llm: createLlmFromEnv(),
+      stores: { bounties, accounts, sessions, challenges, bonds },
+      twetch: {
+        config: {
+          issuer: ISSUER,
+          clientId: 'bounties-test',
+          redirectUri: 'http://localhost:5173/twetch-callback',
+        },
+        pending,
+        exchangeCode: (async (opts: { code: string }) => ({
+          idToken: `stub:${opts.code}`,
+        })) as never,
+        verifyIdToken: (async (opts: { idToken: string }) => {
+          const code = opts.idToken.replace(/^stub:/, '')
+          return {
+            sub: `twetch-login-${code}`,
+            handle: `loginuser-${code}`,
+            displayName: `Login User ${code}`,
+          }
+        }) as never,
+      },
+    })
+  })
+
+  after(() => {
+    globalThis.fetch = origFetch
+  })
+
+  async function json(
+    path: string,
+    init?: RequestInit & { token?: string },
+  ): Promise<{ status: number; data: Record<string, unknown> }> {
+    const headers = new Headers(init?.headers)
+    headers.set('content-type', 'application/json')
+    if (init?.token) headers.set('authorization', `Bearer ${init.token}`)
+    const res = await app.request(path, { ...init, headers })
+    const data = (await res.json()) as Record<string, unknown>
+    return { status: res.status, data }
+  }
+
+  async function loginComplete(code: string, token?: string) {
+    const start = await json('/v1/auth/twetch/login', token ? { token } : undefined)
+    assert.equal(start.status, 200)
+    assert.equal(start.data.mode, 'login')
+    return json('/v1/auth/twetch/complete', {
+      method: 'POST',
+      ...(token ? { token } : {}),
+      body: JSON.stringify({ code, state: start.data.state }),
+    })
+  }
+
+  it('mints a Twetch-native account on first login', async () => {
+    const done = await loginComplete('fresh-1')
+    assert.equal(done.status, 200)
+    assert.equal(done.data.newAccount, true)
+    const account = done.data.account as {
+      number: number
+      controllerKey: string
+      displayName: string
+      twetch: { sub: string; handle: string }
+    }
+    assert.equal(account.controllerKey, 'twetch:twetch-login-fresh-1')
+    assert.equal(account.twetch.sub, 'twetch-login-fresh-1')
+    assert.equal(account.twetch.handle, 'loginuser-fresh-1')
+    assert.ok(typeof done.data.token === 'string')
+
+    // The issued session works like any other.
+    const me = await json('/v1/auth/me', { token: done.data.token as string })
+    assert.equal(me.status, 200)
+    assert.equal(
+      (me.data.account as { number: number }).number,
+      account.number,
+    )
+  })
+
+  it('returns the existing account on repeat login', async () => {
+    const first = await loginComplete('fresh-1')
+    assert.equal(first.status, 200)
+    assert.equal(first.data.newAccount, false)
+    assert.equal(
+      (first.data.account as { number: number }).number,
+      1,
+    )
+  })
+
+  it('verified login sessions pass the high-value gate', async () => {
+    process.env.VERIFIED_POST_MIN_SATS = '1000'
+    try {
+      const done = await loginComplete('gate-2')
+      assert.equal(done.status, 200)
+      const big = await json('/v1/bounties', {
+        method: 'POST',
+        token: done.data.token as string,
+        body: JSON.stringify({
+          title: 'Verified poster job',
+          description: 'twetch-native poster',
+          category: 'dev',
+          amountSats: 5000,
+        }),
+      })
+      assert.equal(big.status, 201)
+    } finally {
+      delete process.env.VERIFIED_POST_MIN_SATS
+    }
   })
 })

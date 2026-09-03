@@ -47,6 +47,20 @@ export function isVerifiedAccount(a: {
   return typeof a.twetch?.sub === 'string' && a.twetch.sub.length > 0
 }
 
+/**
+ * Deterministic controller key for Twetch-native accounts (created by
+ * Login with Twetch, no wallet key involved). Sessions, ownership checks,
+ * and transfers treat it like any other controller key.
+ */
+export function twetchControllerKey(sub: string): string {
+  return `twetch:${sub}`
+}
+
+export function twetchSubFromControllerKey(key: string): string | null {
+  const m = /^twetch:([\s\S]+)$/.exec(key)
+  return m?.[1] && m[1].length > 0 ? m[1] : null
+}
+
 export function twetchBadge(a: {
   twetch?: TwetchIdentity | null
 }): string | null {

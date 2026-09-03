@@ -177,6 +177,7 @@ export function createApp(config: CreateAppConfig): Hono {
     twetchRoutes({
       accounts,
       sessions,
+      network: config.network,
       config: twetchCfg,
       pending: config.twetch?.pending,
       exchangeCode: config.twetch?.exchangeCode,

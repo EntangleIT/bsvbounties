@@ -261,19 +261,47 @@ export function updateProfile(
   })
 }
 
-// --- Twetch verification ("Sign in with Twetch") ---
+// --- Twetch verification + login ("Sign in with Twetch") ---
+
+const TWETCH_OAUTH_STATE_KEY = 'twetch_oauth_state'
+
+/** Remember the OIDC state across the issuer redirect (CSRF check). */
+export function saveTwetchOAuthState(state: string) {
+  try {
+    sessionStorage.setItem(TWETCH_OAUTH_STATE_KEY, state)
+  } catch {
+    /* private mode — the callback still works, just unchecked */
+  }
+}
+
+/** Returns the stored state (or null) and clears it. */
+export function takeTwetchOAuthState(): string | null {
+  try {
+    const v = sessionStorage.getItem(TWETCH_OAUTH_STATE_KEY)
+    sessionStorage.removeItem(TWETCH_OAUTH_STATE_KEY)
+    return v
+  } catch {
+    return null
+  }
+}
 
 export function twetchLogin() {
   return request<{
     authorizationUrl: string
     state: string
     expiresAt: string
-    accountNumber: number
+    mode: 'login' | 'link'
+    accountNumber?: number
   }>('/v1/auth/twetch/login')
 }
 
 export function twetchComplete(code: string, state: string) {
-  return request<{ account: Account }>('/v1/auth/twetch/complete', {
+  return request<{
+    account: Account
+    token?: string
+    expiresAt?: string
+    newAccount?: boolean
+  }>('/v1/auth/twetch/complete', {
     method: 'POST',
     body: JSON.stringify({ code, state }),
   })

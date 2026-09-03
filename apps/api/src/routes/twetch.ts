@@ -7,7 +7,9 @@ import {
   identityFromClaims,
   pkceChallenge,
   randomUrlSafe,
+  twetchControllerKey,
   verifyIdToken as defaultVerifyIdToken,
+  type Network,
   type TwetchRpConfig,
   type VerifiedTwetchClaims,
 } from '@ai-bounties/shared'
@@ -33,8 +35,13 @@ export function twetchConfigFromEnv(): TwetchRpConfig | null {
 interface PendingLogin {
   state: string
   codeVerifier: string
-  accountNumber: number
-  controllerKey: string
+  /**
+   * Link intent: the logged-in account to attach the identity to.
+   * Login intent (Login with Twetch): null — the account is resolved from
+   * the verified `sub` at complete time (find-or-mint).
+   */
+  accountNumber: number | null
+  controllerKey: string | null
   expires: number
 }
 
@@ -99,6 +106,8 @@ export type TwetchVerifyFn = typeof defaultVerifyIdToken
 export interface TwetchRouteDeps {
   accounts: AccountStore
   sessions: SessionStore
+  /** Network for accounts minted by Login with Twetch. */
+  network: Network
   /** Defaults to twetchConfigFromEnv(). Null disables the endpoints (501). */
   config?: TwetchRpConfig | null
   pending?: PendingTwetchStore
@@ -116,7 +125,7 @@ function oidcError(e: unknown): { error: string; note: string } {
 }
 
 export function twetchRoutes(deps: TwetchRouteDeps) {
-  const { accounts, sessions } = deps
+  const { accounts, sessions, network } = deps
   const app = new Hono()
   const pending = deps.pending ?? new PendingTwetchStore()
   const doExchange = deps.exchangeCode ?? defaultExchangeCode
@@ -131,15 +140,29 @@ export function twetchRoutes(deps: TwetchRouteDeps) {
     return config
   }
 
-  /** Start a link flow. Logged-in account visits authorizationUrl, then POSTs code. */
+  /**
+   * Start a Twetch flow.
+   *
+   * - With a Bearer session: LINK intent — attach the identity to the
+   *   logged-in account (`mode: 'link'`, accountNumber echoed).
+   * - Without: LOGIN intent (Login with Twetch) — the account is resolved
+   *   from the verified `sub` at complete time, minting on first login
+   *   (`mode: 'login'`). The visitor opens authorizationUrl, approves at
+   *   the issuer, then POSTs the code to /complete (browser or agent).
+   */
   app.get('/login', async (c) => {
     const cfg = getConfig()
     if (!cfg) return c.json({ error: 'twetch_not_configured' }, 501)
     const session = getSessionFromRequest(sessions, c.req.header('Authorization'))
-    if (!session) return c.json({ error: 'unauthorized' }, 401)
-    const account = accounts.getByNumber(session.accountNumber)
-    if (!account || account.controllerKey !== session.controllerKey) {
-      return c.json({ error: 'stale_session' }, 401)
+    let accountNumber: number | null = null
+    let controllerKey: string | null = null
+    if (session) {
+      const account = accounts.getByNumber(session.accountNumber)
+      if (!account || account.controllerKey !== session.controllerKey) {
+        return c.json({ error: 'stale_session' }, 401)
+      }
+      accountNumber = account.number
+      controllerKey = session.controllerKey
     }
     const state = randomUrlSafe(24)
     const codeVerifier = randomUrlSafe(48)
@@ -157,34 +180,39 @@ export function twetchRoutes(deps: TwetchRouteDeps) {
     await pending.save({
       state,
       codeVerifier,
-      accountNumber: account.number,
-      controllerKey: session.controllerKey,
+      accountNumber,
+      controllerKey,
       expires,
     })
     return c.json({
       authorizationUrl,
       state,
       expiresAt: new Date(expires).toISOString(),
-      accountNumber: account.number,
+      mode: accountNumber == null ? 'login' : 'link',
+      ...(accountNumber == null ? {} : { accountNumber }),
     })
   })
 
-  /** Complete a link flow with the authorization code (browser or agent). */
+  /**
+   * Complete a flow with the authorization code (browser or agent).
+   *
+   * - LINK intent (pending carries an account): requires the matching
+   *   session, attaches the identity, returns { account }.
+   * - LOGIN intent (pending has no account): no session needed; finds the
+   *   account by Twetch `sub`, minting a Twetch-native account
+   *   (`controllerKey: twetch:<sub>`) on first login, opens a session and
+   *   returns { token, expiresAt, account, newAccount }.
+   */
   app.post('/complete', async (c) => {
     const cfg = getConfig()
     if (!cfg) return c.json({ error: 'twetch_not_configured' }, 501)
     const session = getSessionFromRequest(sessions, c.req.header('Authorization'))
-    if (!session) return c.json({ error: 'unauthorized' }, 401)
     const body = z
       .object({ code: z.string().min(4), state: z.string().min(8) })
       .parse(await c.req.json())
 
     const attempt = await pending.take(body.state)
-    if (
-      !attempt ||
-      attempt.accountNumber !== session.accountNumber ||
-      attempt.controllerKey !== session.controllerKey
-    ) {
+    if (!attempt) {
       return c.json({ error: 'invalid_state' }, 400)
     }
 
@@ -219,6 +247,18 @@ export function twetchRoutes(deps: TwetchRouteDeps) {
       return c.json(oidcError(e), 502)
     }
 
+    if (attempt.accountNumber == null) {
+      return completeLogin(c, claims)
+    }
+
+    if (
+      !session ||
+      attempt.accountNumber !== session.accountNumber ||
+      attempt.controllerKey !== session.controllerKey
+    ) {
+      return c.json({ error: 'invalid_state' }, 400)
+    }
+
     const existing = accounts.getByTwetchSub(claims.sub)
     if (existing && existing.number !== attempt.accountNumber) {
       return c.json(
@@ -237,6 +277,49 @@ export function twetchRoutes(deps: TwetchRouteDeps) {
     if (!updated) return c.json({ error: 'not_found' }, 404)
     return c.json({ account: updated })
   })
+
+  /** Login with Twetch: find-or-mint by verified sub, open a session. */
+  async function completeLogin(
+    c: { json: (body: unknown, status?: number) => Response },
+    claims: VerifiedTwetchClaims,
+  ) {
+    const controllerKey = twetchControllerKey(claims.sub)
+    const owned = accounts.getByController(controllerKey)
+    if (owned.length > 0) {
+      const account = owned[0]!
+      if (!account.twetch?.sub) {
+        await accounts.update(account.number, {
+          twetch: identityFromClaims(claims),
+        })
+      }
+      const session = await sessions.create(controllerKey, account.number)
+      const fresh = accounts.getByNumber(account.number)
+      return c.json({
+        token: session.token,
+        expiresAt: session.expiresAt,
+        account: fresh ?? account,
+        newAccount: false,
+      })
+    }
+    const account = await accounts.mint({
+      controllerKey,
+      displayName:
+        claims.displayName ?? claims.handle ?? `twetch:${claims.sub}`,
+      bio: '',
+      kind: 'human',
+      network,
+    })
+    const linked = await accounts.update(account.number, {
+      twetch: identityFromClaims(claims),
+    })
+    const session = await sessions.create(controllerKey, account.number)
+    return c.json({
+      token: session.token,
+      expiresAt: session.expiresAt,
+      account: linked ?? account,
+      newAccount: true,
+    })
+  }
 
   /** Remove the Twetch link from your account. */
   app.post('/unlink', async (c) => {

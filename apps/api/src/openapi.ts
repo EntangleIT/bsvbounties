@@ -104,15 +104,15 @@ export function buildOpenApi(publicUrl: string) {
       '/v1/auth/twetch/login': {
         get: {
           operationId: 'twetchLogin',
-          summary: 'Start Twetch link flow (auth required, returns OIDC URL)',
+          summary: 'Start Twetch flow: link mode when logged in, Login with Twetch when not (auto-provisions account)',
           responses: { '200': { description: 'Authorization URL + state' } },
         },
       },
       '/v1/auth/twetch/complete': {
         post: {
           operationId: 'twetchComplete',
-          summary: 'Complete Twetch link with authorization code (auth required)',
-          responses: { '200': { description: 'Verified account' } },
+          summary: 'Complete Twetch flow: link identity, or login (find-or-mint + session)',
+          responses: { '200': { description: 'Verified account (+session for login)' } },
         },
       },
       '/v1/auth/twetch/unlink': {

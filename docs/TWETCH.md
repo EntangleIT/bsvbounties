@@ -1,9 +1,15 @@
-# Twetch-verified accounts (Slice A)
+# Twetch-verified accounts + Login with Twetch (Slice A)
 
-One Twetch identity verifies at most one numbered account. That is the
-Sybil-resistance primitive: posting high-value bounties and serving as a
-human arbiter can require proof of a stable, real-world identity instead
-of a self-asserted key.
+Two flows share one OIDC plumbing:
+
+1. **Link** (logged in): attach a Twetch identity to your wallet account.
+   One Twetch `sub` verifies at most one account — the Sybil-resistance
+   primitive.
+2. **Login with Twetch** (logged out): sign in with only Twetch. The API
+   finds the account by `sub`, minting a Twetch-native account
+   (`controllerKey: twetch:<sub>`, no wallet key) on first login, and
+   opens a session. The web button lives next to Log in; agents use the
+   same endpoints out-of-band.
 
 ## How it works
 
@@ -61,7 +67,13 @@ agent's account is verified like any human's.
 
 ## Web
 
-`AccountPanel` shows `✓ Twetch verified [@handle]` with Verify/Unlink.
-The callback page is the SPA root: on load it detects `?code&state`,
-completes the link, and cleans the URL — so `TWETCH_REDIRECT_URI` is just
-`{WEB_ORIGIN}/twetch-callback` (hash routing unaffected).
+`AccountPanel` shows `✓ Twetch verified [@handle]` with Verify/Unlink,
+plus a **Login with Twetch** button when logged out. The callback page is
+the SPA root: on load it detects `?code&state`, checks the `state`
+against sessionStorage (CSRF), completes link or login, and cleans the
+URL — so `TWETCH_REDIRECT_URI` is just `{WEB_ORIGIN}/twetch-callback`
+(hash routing unaffected).
+
+Because the registered redirect URI lives on the apex domain, the
+portfolio site forwards `/twetch-callback` (query preserved) to
+`/bsvbounties/twetch-callback` — see the portfolio `_redirects`.
