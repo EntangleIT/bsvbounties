@@ -97,6 +97,7 @@ export interface OidcDiscovery {
   token_endpoint: string
   userinfo_endpoint?: string
   jwks_uri: string
+  id_token_signing_alg_values_supported?: string[]
 }
 
 const discoveryCache = new Map<string, { at: number; doc: OidcDiscovery }>()
@@ -233,8 +234,12 @@ function normalizeIssuer(issuer: string): string {
 }
 
 /**
- * Verify an OIDC ID token against the issuer's JWKS. RS256 only —
- * `none` and symmetric algs are always rejected.
+ * Verify an OIDC ID token against the issuer's JWKS.
+ *
+ * Accepts the asymmetric JWS algorithms an OIDC issuer actually uses
+ * (RS256, ES256), constrained by the issuer's own discovery document
+ * (`id_token_signing_alg_values_supported`). `none` and symmetric algs
+ * (HS256/384/512) are always rejected.
  */
 export async function verifyIdToken(opts: {
   idToken: string
@@ -254,33 +259,53 @@ export async function verifyIdToken(opts: {
   } catch {
     throw new Error('twetch_id_token_malformed')
   }
-  if (header.alg !== 'RS256') throw new Error('twetch_id_token_bad_alg')
+
+  const discovery = await fetchDiscovery(opts.issuer)
+  const advertised =
+    (discovery as { id_token_signing_alg_values_supported?: unknown })
+      .id_token_signing_alg_values_supported
+  const allowed = new Set(['RS256', 'ES256'])
+  if (Array.isArray(advertised) && advertised.length > 0) {
+    for (const a of [...allowed]) {
+      if (!(advertised as unknown[]).includes(a)) allowed.delete(a)
+    }
+  }
+  if (typeof header.alg !== 'string' || !allowed.has(header.alg)) {
+    throw new Error('twetch_id_token_bad_alg')
+  }
   if (!header.kid) throw new Error('twetch_id_token_no_kid')
 
-  let jwksUri = opts.jwksUri
-  if (!jwksUri) {
-    const discovery = await fetchDiscovery(opts.issuer)
-    jwksUri = discovery.jwks_uri
-  }
+  const jwksUri = opts.jwksUri ?? discovery.jwks_uri
   const keys = await fetchJwks(jwksUri)
   const jwk = keys.find(
     (k) =>
       (k as { kid?: string }).kid === header.kid &&
-      (k as { kty?: string }).kty === 'RSA',
+      (header.alg === 'RS256'
+        ? (k as { kty?: string }).kty === 'RSA'
+        : (k as { kty?: string }).kty === 'EC' &&
+          (k as { crv?: string }).crv === 'P-256'),
   )
   if (!jwk) throw new Error('twetch_id_token_unknown_kid')
 
+  const alg = header.alg as 'RS256' | 'ES256'
+  const importAlg =
+    alg === 'RS256'
+      ? { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }
+      : { name: 'ECDSA', namedCurve: 'P-256' }
   const key = await globalThis.crypto.subtle.importKey(
     'jwk',
     jwk,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    importAlg,
     false,
     ['verify'],
   )
   const signingInput = new TextEncoder().encode(`${hB64}.${pB64}`)
+  // JWS and WebCrypto both use raw R||S for ECDSA (no DER conversion).
   const signatureBuf = new Uint8Array(base64UrlDecode(sB64))
+  const verifyAlg =
+    alg === 'RS256' ? 'RSASSA-PKCS1-v1_5' : { name: 'ECDSA', hash: 'SHA-256' }
   const ok = await globalThis.crypto.subtle.verify(
-    'RSASSA-PKCS1-v1_5',
+    verifyAlg,
     key,
     signatureBuf,
     signingInput,
