@@ -111,10 +111,11 @@ export function submitWork(
   workHash: string | undefined,
   workUri?: string,
   notes?: string,
+  seal?: unknown,
 ) {
   return request(`/v1/bounties/${id}/submit`, {
     method: 'POST',
-    body: JSON.stringify({ workHash, workUri, notes }),
+    body: JSON.stringify({ workHash, workUri, notes, seal }),
   })
 }
 
@@ -174,6 +175,54 @@ export function attachEscrow(id: string, escrowTxid: string) {
     method: 'PATCH',
     body: JSON.stringify({ escrowTxid }),
   })
+}
+
+export function createBountyCheckout(id: string) {
+  return request<{
+    url: string
+    sessionId: string
+    bountyId: string
+    amountSats: number
+    netUsdCents: number
+    feeUsdCents: number
+    totalUsdCents: number
+    bsvUsd: number
+    usdFeeBps: number
+    usdFeePercent: string
+    integrationIdentifier: string
+    note: string
+  }>(`/v1/bounties/${id}/checkout`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function getFundingConfig() {
+  return request<{
+    stripeConfigured: boolean
+    bsvUsd: number | null
+    usdFeeBps: number
+    usdFeePercent: string
+    satFeeBps: number
+    satFeePercent: string
+    stripeFixedFeeCents: number
+    currency: string
+    note: string
+  }>('/v1/funding/config')
+}
+
+export function quoteFunding(amountSats: number) {
+  return request<{
+    amountSats: number
+    bsvUsd: number
+    netUsdCents: number
+    feeUsdCents: number
+    totalUsdCents: number
+    usdFeeBps: number
+    usdFeePercent: string
+    satFeeBps: number
+    satFeePercent: string
+  }>(`/v1/funding/quote?amountSats=${encodeURIComponent(String(amountSats))}`)
 }
 
 // --- Accounts ---
@@ -258,6 +307,67 @@ export function updateProfile(
     method: 'PATCH',
     body: JSON.stringify(body),
   })
+}
+
+// --- Twetch verification + login ("Sign in with Twetch") ---
+
+const TWETCH_OAUTH_STATE_KEY = 'twetch_oauth_state'
+
+/** Remember the OIDC state across the issuer redirect (CSRF check). */
+export function saveTwetchOAuthState(state: string) {
+  try {
+    sessionStorage.setItem(TWETCH_OAUTH_STATE_KEY, state)
+  } catch {
+    /* private mode — the callback still works, just unchecked */
+  }
+}
+
+/** Returns the stored state (or null) and clears it. */
+export function takeTwetchOAuthState(): string | null {
+  try {
+    const v = sessionStorage.getItem(TWETCH_OAUTH_STATE_KEY)
+    sessionStorage.removeItem(TWETCH_OAUTH_STATE_KEY)
+    return v
+  } catch {
+    return null
+  }
+}
+
+export function twetchLogin() {
+  return request<{
+    authorizationUrl: string
+    state: string
+    expiresAt: string
+    mode: 'login' | 'link'
+    accountNumber?: number
+  }>('/v1/auth/twetch/login')
+}
+
+export function twetchComplete(code: string, state: string) {
+  return request<{
+    account: Account
+    token?: string
+    expiresAt?: string
+    newAccount?: boolean
+  }>('/v1/auth/twetch/complete', {
+    method: 'POST',
+    body: JSON.stringify({ code, state }),
+  })
+}
+
+export function twetchUnlink() {
+  return request<{ account: Account }>('/v1/auth/twetch/unlink', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function twetchStatus() {
+  return request<{
+    verified: boolean
+    twetch: Account['twetch'] | null
+    configured: boolean
+  }>('/v1/auth/twetch/status')
 }
 
 // --- Auth ---

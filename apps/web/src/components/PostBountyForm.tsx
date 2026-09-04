@@ -1,12 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   authChallenge,
   authLogin,
   createBounty,
+  createBountyCheckout,
   draftBounty,
   attachEscrow,
   getAuthToken,
+  getFundingConfig,
   mintAccount,
+  quoteFunding,
   setAuthToken,
 } from '../lib/api'
 import { ensureYoursConnected } from '../lib/wallet'
@@ -20,8 +23,9 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
   const [amountSats, setAmountSats] = useState(10000)
   const [idea, setIdea] = useState('')
   const [acceptKind, setAcceptKind] = useState<
-    'manual' | 'http' | 'hash' | 'llm-judge'
+    'manual' | 'http' | 'hash' | 'llm-judge' | 'sealed'
   >('manual')
+  const [sealedTimestamp, setSealedTimestamp] = useState(false)
   const [jsonPath, setJsonPath] = useState('ok')
   const [expectValue, setExpectValue] = useState('true')
   const [checkUrl, setCheckUrl] = useState('')
@@ -32,6 +36,35 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [cardEnabled, setCardEnabled] = useState(false)
+  const [usdPreview, setUsdPreview] = useState<string | null>(null)
+  const [feeNote, setFeeNote] = useState<string | null>(null)
+
+  useEffect(() => {
+    void getFundingConfig()
+      .then((c) => {
+        setCardEnabled(c.stripeConfigured && c.bsvUsd != null)
+        setFeeNote(
+          `Card: ${c.usdFeePercent} + $${(c.stripeFixedFeeCents / 100).toFixed(2)} USD. ` +
+            `Payout still takes ${c.satFeePercent} in sats.`,
+        )
+      })
+      .catch(() => setCardEnabled(false))
+  }, [])
+
+  useEffect(() => {
+    if (!cardEnabled || !amountSats) {
+      setUsdPreview(null)
+      return
+    }
+    void quoteFunding(amountSats)
+      .then((q) =>
+        setUsdPreview(
+          `≈ $${(q.totalUsdCents / 100).toFixed(2)} USD (${q.usdFeePercent} + $0.30)`,
+        ),
+      )
+      .catch(() => setUsdPreview(null))
+  }, [amountSats, cardEnabled])
 
   async function ensurePosterSession() {
     if (getAuthToken()) return
@@ -86,32 +119,23 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
     }
   }
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setBusy(true)
-    setError(null)
-    setMessage(null)
-    try {
-      const wallet = await ensureYoursConnected()
-      await ensurePosterSession()
-      const identity = await wallet.getIdentityKey()
+  async function buildBody() {
+    let expect: string | number | boolean = expectValue
+    if (expectValue === 'true') expect = true
+    else if (expectValue === 'false') expect = false
+    else if (/^-?\d+(\.\d+)?$/.test(expectValue)) expect = Number(expectValue)
 
-      let expect: string | number | boolean = expectValue
-      if (expectValue === 'true') expect = true
-      else if (expectValue === 'false') expect = false
-      else if (/^-?\d+(\.\d+)?$/.test(expectValue)) expect = Number(expectValue)
-
-      const acceptance =
-        acceptKind === 'http'
-          ? {
-              kind: 'http' as const,
-              expectStatus: 200,
-              ...(checkUrl.trim() ? { url: checkUrl.trim() } : {}),
-              ...(jsonPath.trim() ? { jsonPath: jsonPath.trim(), expect } : {}),
-              ...(contentTypePrefix.trim()
-                ? { contentTypePrefix: contentTypePrefix.trim() }
-                : {}),
-            }
+    const acceptance =
+      acceptKind === 'http'
+        ? {
+            kind: 'http' as const,
+            expectStatus: 200,
+            ...(checkUrl.trim() ? { url: checkUrl.trim() } : {}),
+            ...(jsonPath.trim() ? { jsonPath: jsonPath.trim(), expect } : {}),
+            ...(contentTypePrefix.trim()
+              ? { contentTypePrefix: contentTypePrefix.trim() }
+              : {}),
+          }
           : acceptKind === 'hash'
             ? { kind: 'hash' as const }
             : acceptKind === 'llm-judge'
@@ -119,16 +143,38 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
                   kind: 'llm-judge' as const,
                   ...(llmRubric.trim() ? { rubric: llmRubric.trim() } : {}),
                 }
-              : { kind: 'manual' as const }
+              : acceptKind === 'sealed'
+                ? {
+                    kind: 'sealed' as const,
+                    ...(sealedTimestamp ? { requireTimestamp: true } : {}),
+                  }
+                : { kind: 'manual' as const }
 
-      const milestones =
-        splits > 1
-          ? Array.from({ length: splits }, (_, i) => ({
-              title: `Slice ${i + 1}/${splits}`,
-              amountSats: Math.floor(amountSats / splits) + (i === splits - 1 ? amountSats % splits : 0),
-              acceptance,
-            }))
-          : undefined
+    const milestones =
+      splits > 1
+        ? Array.from({ length: splits }, (_, i) => ({
+            title: `Slice ${i + 1}/${splits}`,
+            amountSats:
+              Math.floor(amountSats / splits) +
+              (i === splits - 1 ? amountSats % splits : 0),
+            acceptance,
+          }))
+        : undefined
+
+    return { acceptance, milestones }
+  }
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    let createdId: string | null = null
+    try {
+      const wallet = await ensureYoursConnected()
+      await ensurePosterSession()
+      const identity = await wallet.getIdentityKey()
+      const { acceptance, milestones } = await buildBody()
 
       const created = await createBounty({
         title,
@@ -142,12 +188,30 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
       })
 
       if (created.createActionTemplate) {
-        const result = await wallet.createAction(created.createActionTemplate)
-        if (result.txid) {
-          await attachEscrow(created.bounty.id, result.txid)
-          setMessage(`Posted on-chain. txid=${result.txid}`)
-        } else {
-          setMessage('Bounty created; Yours Wallet did not return a txid yet.')
+        // First post ever triggers several one-time Yours grants (basket +
+        // labels); they persist per origin, so later posts skip them. Say so
+        // up front — a silent multi-prompt sequence reads as broken.
+        setMessage(
+          'Bounty created. Check Yours Wallet: approve the access requests (one-time setup), then review the funding signature — or deny it to leave the bounty open and unfunded.',
+        )
+        try {
+          const result = await wallet.createAction(
+            created.createActionTemplate,
+          )
+          if (result.txid) {
+            await attachEscrow(created.bounty.id, result.txid)
+            setMessage(`Posted on-chain. txid=${result.txid}`)
+          } else {
+            setMessage(
+              `Bounty ${created.bounty.id.slice(0, 8)}… created; Yours Wallet did not return a txid yet.`,
+            )
+          }
+        } catch (wErr) {
+          // Funding denied/failed: the bounty already exists server-side —
+          // say so instead of leaving the board stale.
+          setMessage(
+            `Bounty ${created.bounty.id.slice(0, 8)}… created, but wallet funding was skipped (${wErr instanceof Error ? wErr.message : String(wErr)}). It is open and unfunded.`,
+          )
         }
       } else {
         setMessage(
@@ -155,10 +219,46 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
         )
       }
 
+      createdId = created.bounty.id
       setTitle('')
       setDescription('')
       setIdea('')
+    } catch (e) {
+      if (!createdId) setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+      // Always re-fetch: a denied/failed wallet step must not leave a stale board.
       onCreated()
+    }
+  }
+
+  async function onFundWithCard() {
+    if (title.trim().length < 3 || description.trim().length < 10 || amountSats < 1) {
+      setError('Fill in title, description, and amount before funding with a card.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    try {
+      await ensurePosterSession()
+      const { acceptance, milestones } = await buildBody()
+      const created = await createBounty({
+        title,
+        description,
+        category,
+        amountSats,
+        acceptance,
+        arbiter: llmArbiter ? 'llm' : undefined,
+        milestones,
+      })
+      onCreated()
+      const checkout = await createBountyCheckout(created.bounty.id)
+      if (checkout.url) {
+        window.location.assign(checkout.url)
+        return
+      }
+      setMessage('Checkout created but Stripe did not return a URL.')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -171,8 +271,10 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
       <h2>Post a bounty</h2>
       <p className="muted">
         Humans and agents can post. Connect Yours Wallet so escrow funds a real
-        BSV output. Manual / hash / LLM judge for files (logos, Drive). HTTP
-        check only for JSON APIs — that GETs the work URL.
+        BSV output, or use <strong>Fund with card</strong> to pay USD on Stripe
+        (solver is still paid in BSV from the platform float). Manual / hash /
+        LLM judge for files (logos, Drive). HTTP check only for JSON APIs — that
+        GETs the work URL.
       </p>
 
       <label>
@@ -231,6 +333,8 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
           />
         </label>
       </div>
+      {usdPreview && <p className="muted small">{usdPreview}</p>}
+      {feeNote && <p className="muted small">{feeNote}</p>}
 
       <div className="row">
         <label>
@@ -239,7 +343,12 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
             value={acceptKind}
             onChange={(e) =>
               setAcceptKind(
-                e.target.value as 'manual' | 'http' | 'hash' | 'llm-judge',
+                e.target.value as
+                  | 'manual'
+                  | 'http'
+                  | 'hash'
+                  | 'llm-judge'
+                  | 'sealed',
               )
             }
           >
@@ -247,6 +356,7 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
             <option value="hash">Hash of file (auto-pay)</option>
             <option value="http">HTTP JSON API (auto-pay)</option>
             <option value="llm-judge">LLM judge (auto-pay)</option>
+            <option value="sealed">Sealed proof (auto-pay)</option>
           </select>
         </label>
         <label>
@@ -268,6 +378,18 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
           auto-pays on match. Prefer a direct download/export link over a Drive
           share page.
         </p>
+      )}
+
+      {acceptKind === 'sealed' && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={sealedTimestamp}
+            onChange={(e) => setSealedTimestamp(e.target.checked)}
+          />
+          Require trusted timestamp (RFC 3161 — platform stamps if the worker
+          has none; TSA outages fail soft, work stays submitted)
+        </label>
       )}
 
       {acceptKind === 'llm-judge' && (
@@ -334,9 +456,24 @@ export function PostBountyForm({ onCreated }: { onCreated: () => void }) {
         LLM arbiter on dispute
       </label>
 
-      <button type="submit" className="btn primary" disabled={busy}>
-        {busy ? 'Working…' : 'Post bounty'}
-      </button>
+      <div className="form-actions">
+        <button type="submit" className="btn primary" disabled={busy}>
+          {busy ? 'Working…' : 'Post bounty'}
+        </button>
+        <button
+          type="button"
+          className="btn secondary"
+          disabled={busy || !cardEnabled}
+          title={
+            cardEnabled
+              ? 'Hosted Stripe Checkout (USD). No keys in the browser.'
+              : 'Card funding needs STRIPE_SECRET_KEY + BSV_USD on the API.'
+          }
+          onClick={() => void onFundWithCard()}
+        >
+          Fund with card
+        </button>
+      </div>
 
       {message && <p className="ok">{message}</p>}
       {error && <p className="err">{error}</p>}

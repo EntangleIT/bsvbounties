@@ -12,6 +12,7 @@ import {
   initMilestones,
   isAutoRelease,
   isSoftVerification,
+  isVerifiedAccount,
   parseAcceptance,
   sha256Hex,
   validateMilestones,
@@ -21,6 +22,9 @@ import {
   type BountyEscrowMeta,
   type Milestone,
   type Network,
+  type Rfc3161Stamp,
+  type SealEnvelope,
+  type SealSubmitter,
 } from '@ai-bounties/shared'
 import {
   applyTransition,
@@ -43,13 +47,33 @@ import type { BountyStore } from '../store/bountyStore.js'
 import type { AccountStore } from '../store/accountStore.js'
 import type { SessionStore } from '../store/sessionStore.js'
 import type { BondStore } from '../store/bondStore.js'
+import type { StripeEventStore } from '../store/stripeEventStore.js'
+import {
+  checkoutIntegrationIdentifier,
+  type StripeAdapter,
+} from '../stripe/client.js'
+import { bsvUsdFromEnv, quoteCardCharge, usdFeePercent } from '../stripe/quote.js'
 import { getSessionFromRequest } from './auth.js'
 import { bondGate, workerBondGate } from './bonds.js'
 import { runBountyVerifier, runLlmArbiter } from '../verifyFlow.js'
 
+export type BountyStripeContext = {
+  adapter: StripeAdapter | null
+  events: StripeEventStore
+  returnBase: string
+}
+
 const acceptanceSchema = z
   .object({
-    kind: z.enum(['manual', 'http', 'schema', 'command', 'hash', 'llm-judge']),
+    kind: z.enum([
+      'manual',
+      'http',
+      'schema',
+      'command',
+      'hash',
+      'llm-judge',
+      'sealed',
+    ]),
   })
   .passthrough()
 
@@ -90,6 +114,49 @@ const claimSchema = z.object({
   workerLockingScriptHex: z.string().optional(),
 })
 
+/** Trust B: sealed-submission envelope. Deep validation happens in verifySealed (fail closed). */
+const sealSchema = z
+  .object({
+    version: z.number(),
+    workHash: z.string(),
+    submitter: z
+      .object({
+        controllerKey: z.string().optional(),
+        accountNumber: z.number().optional(),
+        displayName: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    events: z.array(
+      z
+        .object({
+          prevHash: z.string(),
+          type: z.string(),
+          at: z.string(),
+          actorId: z.string(),
+          actorName: z.string(),
+          contentHash: z.string(),
+          meta: z.record(z.string()).optional(),
+          eventHash: z.string(),
+        })
+        .passthrough(),
+    ),
+    rfc3161: z
+      .object({
+        tsa: z.string(),
+        tsaUrl: z.string(),
+        hashedMessage: z.string(),
+        genTime: z.string(),
+        tokenB64: z.string(),
+        serial: z.string(),
+        status: z.number(),
+      })
+      .passthrough()
+      .optional(),
+    anchorTxid: z.string().optional(),
+  })
+  .passthrough()
+
 const submitSchema = z
   .object({
     workHash: z.string().min(16).optional(),
@@ -97,8 +164,9 @@ const submitSchema = z
     notes: z.string().max(4000).optional(),
     submitTxid: z.string().optional(),
     milestoneIndex: z.number().int().nonnegative().optional(),
+    seal: sealSchema.optional(),
   })
-  .refine((d) => Boolean(d.workHash || d.workUri || d.notes), {
+  .refine((d) => Boolean(d.workHash || d.workUri || d.notes || d.seal), {
     message: 'workHash_or_workUri_required',
   })
 
@@ -188,6 +256,7 @@ export function bountyRoutes(
   sessions?: SessionStore,
   bonds?: BondStore,
   llm?: LlmClient,
+  stripe?: BountyStripeContext,
 ) {
   const app = new Hono()
   const requireAccounts = process.env.REQUIRE_ACCOUNT_FOR_CLAIM === 'true'
@@ -266,6 +335,25 @@ export function bountyRoutes(
           note: 'Account ownership changed. Log in again.',
         },
         401,
+      )
+    }
+
+    // Sybil gate: high-value posts require a Twetch-verified account.
+    // Inactive unless VERIFIED_POST_MIN_SATS is set to a finite number.
+    const verifiedMinRaw = (process.env.VERIFIED_POST_MIN_SATS ?? '').trim()
+    const verifiedMin = verifiedMinRaw === '' ? NaN : Number(verifiedMinRaw)
+    if (
+      Number.isFinite(verifiedMin) &&
+      body.amountSats >= verifiedMin &&
+      !isVerifiedAccount(owned)
+    ) {
+      return c.json(
+        {
+          error: 'needs_verification',
+          thresholdSats: verifiedMin,
+          note: 'Bounties at or above this value require a Twetch-verified account. Link one via GET /v1/auth/twetch/login → POST /v1/auth/twetch/complete.',
+        },
+        403,
       )
     }
 
@@ -490,8 +578,124 @@ export function bountyRoutes(
     const updated = await store.update(c.req.param('id'), {
       escrowTxid: body.escrowTxid,
       escrow,
+      funding: {
+        ...existing.funding,
+        method: 'bsv',
+        status: 'funded',
+        fundedAt: existing.funding?.fundedAt ?? new Date().toISOString(),
+      },
     })
     return c.json(updated)
+  })
+
+  /**
+   * Hosted Stripe Checkout (USD card) for a bounty the poster already created.
+   * Same auth as POST /v1/bounties. Marks funded only via webhook.
+   */
+  app.post('/:id/checkout', async (c) => {
+    const existing = store.get(c.req.param('id'))
+    if (!existing) return c.json({ error: 'not_found' }, 404)
+
+    const session = sessions
+      ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+      : undefined
+    if (!session) {
+      return c.json(
+        {
+          error: 'unauthorized',
+          note: 'Login required to fund with a card. Send Authorization: Bearer <token> (same session as POST /v1/bounties).',
+        },
+        401,
+      )
+    }
+    const posterKey =
+      existing.posterPubKey || existing.escrow?.posterPubKey || ''
+    if (posterKey && session.controllerKey !== posterKey) {
+      return c.json(
+        {
+          error: 'forbidden',
+          note: 'Only the bounty poster session may start card checkout.',
+        },
+        403,
+      )
+    }
+
+    if (existing.funding?.status === 'funded' || existing.escrowTxid) {
+      return c.json(
+        {
+          error: 'already_funded',
+          note: 'This bounty is already funded (card webhook or BSV escrowTxid).',
+        },
+        409,
+      )
+    }
+    if (['paid', 'refunded', 'cancelled'].includes(existing.status)) {
+      return c.json(
+        { error: 'invalid_status', status: existing.status },
+        409,
+      )
+    }
+
+    if (!stripe?.adapter) {
+      return c.json(
+        {
+          error: 'stripe_not_configured',
+          note: 'Set STRIPE_SECRET_KEY (wrangler secret) to enable Fund with card.',
+        },
+        503,
+      )
+    }
+    const bsvUsd = bsvUsdFromEnv()
+    if (bsvUsd == null) {
+      return c.json(
+        {
+          error: 'bsv_usd_rate_missing',
+          note: 'Set BSV_USD (USD per BSV) to convert the sat amount into a USD Checkout charge.',
+        },
+        503,
+      )
+    }
+
+    const quote = quoteCardCharge({
+      amountSats: existing.amountSats,
+      bsvUsd,
+    })
+    const integrationIdentifier = checkoutIntegrationIdentifier()
+    const returnBase = stripe.returnBase.replace(/\/$/, '')
+    const created = await stripe.adapter.createCheckoutSession({
+      bounty: existing,
+      quote,
+      successUrl: `${returnBase}/?checkout=success&bounty=${encodeURIComponent(existing.id)}`,
+      cancelUrl: `${returnBase}/?checkout=cancel&bounty=${encodeURIComponent(existing.id)}`,
+      integrationIdentifier,
+    })
+
+    await store.update(existing.id, {
+      funding: {
+        method: 'card',
+        status: 'pending',
+        stripeCheckoutSessionId: created.id,
+        amountUsdCents: quote.totalUsdCents,
+        amountSats: existing.amountSats,
+        bsvUsd,
+        usdFeeBps: quote.usdFeeBps,
+        integrationIdentifier,
+      },
+    })
+
+    return c.json({
+      url: created.url,
+      sessionId: created.id,
+      bountyId: existing.id,
+      ...quote,
+      usdFeePercent: usdFeePercent(quote.usdFeeBps),
+      integrationIdentifier,
+      note:
+        'Redirect the poster to `url` (hosted Stripe Checkout). ' +
+        'Funding is confirmed by POST /v1/stripe/webhook on checkout.session.completed. ' +
+        `USD fee ${usdFeePercent(quote.usdFeeBps)} + $${(quote.fixedFeeCents / 100).toFixed(2)}; ` +
+        'sat payout fee is unchanged (PLATFORM_FEE_BPS).',
+    })
   })
 
   async function runEscrowMethod(
@@ -711,10 +915,20 @@ export function bountyRoutes(
         defaultAcceptance())
       : (existing.acceptance ?? defaultAcceptance())
 
+    // Authenticated submitter (when present) binds the seal envelope to them.
+    const submitSession = sessions
+      ? getSessionFromRequest(sessions, c.req.header('Authorization'))
+      : undefined
+    const seal = body.seal as unknown as SealEnvelope | undefined
+    const expectedSubmitter = submitSession
+      ? {
+          controllerKey: submitSession.controllerKey,
+          accountNumber: submitSession.accountNumber,
+        }
+      : undefined
+
     if (existing.escrow) {
-      const session = sessions
-        ? getSessionFromRequest(sessions, c.req.header('Authorization'))
-        : undefined
+      const session = submitSession
       const signer =
         session?.controllerKey ??
         existing.workerPubKey ??
@@ -736,6 +950,7 @@ export function bountyRoutes(
         milestoneIndex,
         spec,
         action,
+        { seal, expectedSubmitter },
       )
       return c.json(afterSubmit)
     }
@@ -747,6 +962,7 @@ export function bountyRoutes(
       status: 'submitted',
       workHash,
       workUri: body.workUri,
+      seal,
     })
     const afterSubmit = await finishSubmit(
       existing.id,
@@ -759,6 +975,7 @@ export function bountyRoutes(
         bounty: store.get(existing.id)!,
         labels: [BRC100_LABELS.app, BRC100_LABELS.submit],
       },
+      { seal, expectedSubmitter },
     )
     return c.json(afterSubmit)
   })
@@ -771,6 +988,10 @@ export function bountyRoutes(
     milestoneIndex: number,
     spec: AcceptanceSpec,
     action: Record<string, unknown> & { bounty?: Bounty },
+    submit?: {
+      seal?: SealEnvelope
+      expectedSubmitter?: SealSubmitter
+    },
   ) {
     let bounty = store.get(bountyId)!
     let milestones = bounty.milestones ? [...bounty.milestones] : undefined
@@ -791,7 +1012,19 @@ export function bountyRoutes(
       workHash,
       notes,
       llm,
+      seal: submit?.seal,
+      expectedSubmitter: submit?.expectedSubmitter,
     })
+
+    // Platform-stamped token (sealed + requireTimestamp, worker supplied
+    // none): persist it so the envelope stays independently verifiable.
+    let seal = submit?.seal
+    const stamped = (
+      verification.details as { stamp?: Rfc3161Stamp } | undefined
+    )?.stamp
+    if (stamped && seal && !seal.rfc3161) {
+      seal = { ...seal, rfc3161: stamped }
+    }
 
     // Pass → paid. Soft waits (manual / LLM outage) and hard verify fails stay
     // "submitted" so the worker can resubmit or the poster can approve — never
@@ -843,6 +1076,7 @@ export function bountyRoutes(
     const updated = await store.update(bountyId, {
       workUri,
       workHash,
+      seal,
       lastVerification: verification,
       milestones,
       releasedSats,

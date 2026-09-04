@@ -172,6 +172,12 @@ export function llmRoutes(
 
     return c.json({
       ...parsed,
+      suggestedOrder: [...unique]
+        .sort(
+          (a, b) =>
+            reputationOf(b).score - reputationOf(a).score || a.number - b.number,
+        )
+        .map((w) => w.number),
       workers: payload,
       provider: res.provider,
       model: res.model,

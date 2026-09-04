@@ -20,9 +20,26 @@ export function WalletBar() {
 
   if (status === 'detecting' || status === 'connecting' || status === 'selecting') {
     return (
-      <span className="pill">
-        {status === 'detecting' ? 'wallet: detecting…' : 'Connecting…'}
-      </span>
+      <>
+        <span className="pill">
+          {status === 'detecting' ? 'wallet: detecting…' : 'Connecting…'}
+        </span>
+        <span
+          className="muted small"
+          title="The approval dialog opens inside the Yours Wallet extension, not on this page."
+        >
+          approve in the Yours popup ↑
+        </span>
+        <a
+          className="pill"
+          href={YOURS_CHROME}
+          target="_blank"
+          rel="noreferrer"
+          title={`No popup appearing? Install the extension (${YOURS_SITE})`}
+        >
+          Get Yours
+        </a>
+      </>
     )
   }
 

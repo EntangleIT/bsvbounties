@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   formatVerificationReason,
+  createSubmitSeal,
+  sha256Hex,
   type AcceptanceKind,
   type Account,
   type Bounty,
 } from '@ai-bounties/shared'
 import {
   claimBounty,
+  createBountyCheckout,
   disputeBounty,
+  getFundingConfig,
   getLlmConfig,
   listBounties,
   settleBounty,
@@ -30,8 +34,41 @@ export function App() {
   )
   const [account, setAccount] = useState<Account | null>(null)
   const [mode, setMode] = useState(walletMode())
+  const [banner, setBanner] = useState<string | null>(null)
+  const [cardFundingEnabled, setCardFundingEnabled] = useState(false)
 
   useEffect(() => subscribeWallet(() => setMode(walletMode())), [])
+
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search)
+    const checkout = q.get('checkout')
+    const bounty = q.get('bounty')
+    if (checkout === 'success') {
+      setBanner(
+        `Card payment submitted${bounty ? ` for ${bounty.slice(0, 8)}…` : ''}. Funding is confirmed when the Stripe webhook lands — hit refresh in a few seconds.`,
+      )
+    } else if (checkout === 'cancel') {
+      setBanner(
+        'Card checkout canceled. Use Fund with card on the bounty card to try again.',
+      )
+    }
+    if (checkout) {
+      q.delete('checkout')
+      q.delete('bounty')
+      const search = q.toString()
+      window.history.replaceState(
+        {},
+        '',
+        `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`,
+      )
+    }
+  }, [])
+
+  useEffect(() => {
+    void getFundingConfig()
+      .then((c) => setCardFundingEnabled(c.stripeConfigured && c.bsvUsd != null))
+      .catch(() => setCardFundingEnabled(false))
+  }, [])
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -71,10 +108,26 @@ export function App() {
         : Array.from(crypto.getRandomValues(new Uint8Array(32)))
             .map((b) => b.toString(16).padStart(2, '0'))
             .join('')
+      // Sealed bounties: attach a custody envelope binding the same workHash
+      // the server derives, so verification is proof-of-existence, not fetch.
+      const bounty = bounties.find((b) => b.id === id)
+      const sealed = bounty?.acceptance?.kind === 'sealed'
+      const envelope = sealed
+        ? createSubmitSeal({
+            workHash: (hash ?? sha256Hex(workUri)).toLowerCase(),
+            submitter: {
+              controllerKey: account?.controllerKey,
+              accountNumber: account?.number,
+              displayName: account?.displayName,
+            },
+          })
+        : undefined
       const res = (await submitWork(
         id,
         hash,
         workUri || undefined,
+        undefined,
+        envelope,
       )) as {
         autoReleased?: boolean
         verification?: { passed?: boolean; reason?: string; details?: Record<string, unknown>; kind?: string }
@@ -113,6 +166,19 @@ export function App() {
     try {
       await disputeBounty(id, 'UI dispute')
       await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function onFundCard(id: string) {
+    try {
+      const res = await createBountyCheckout(id)
+      if (res.url) {
+        window.location.assign(res.url)
+        return
+      }
+      setError('Stripe did not return a Checkout URL.')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -166,6 +232,7 @@ export function App() {
         </section>
 
         <section className="col-main">
+          {banner && <p className="banner ok">{banner}</p>}
           <PostBountyForm onCreated={refresh} />
 
           <div className="board">
@@ -207,6 +274,9 @@ export function App() {
                   onSubmit={onSubmit}
                   onApprove={onApprove}
                   onDispute={onDispute}
+                  onFundCard={onFundCard}
+                  posterAccountNumber={account?.number}
+                  cardFundingEnabled={cardFundingEnabled}
                 />
               ))}
             </div>

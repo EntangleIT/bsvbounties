@@ -1,5 +1,14 @@
 import { sha256Hex } from './hash.js'
 import {
+  requestRfc3161,
+  type Rfc3161Stamp,
+} from './rfc3161.js'
+import {
+  verifySealEnvelope,
+  type SealEnvelope,
+  type SealSubmitter,
+} from './seal.js'
+import {
   assertHttpUrl,
   getJsonPath,
   googleDriveFileId,
@@ -34,6 +43,13 @@ export interface VerifyDeps {
   fetch?: typeof fetch
   llmJudge?: (input: LlmJudgeInput) => Promise<LlmJudgeResult>
   now?: () => Date
+  /**
+   * Platform timestamping (server-side TSA request, no CORS). Used when a
+   * `sealed` acceptance requires a timestamp the envelope lacks — the
+   * resulting stamp is returned in `details.stamp` so the caller can persist
+   * it on the bounty. Injectable for tests.
+   */
+  stamp?: (workHash: string) => Promise<Rfc3161Stamp>
 }
 
 export interface VerifyWorkInput {
@@ -44,6 +60,10 @@ export interface VerifyWorkInput {
   requirements?: string[]
   title?: string
   description?: string
+  /** Sealed-submission envelope (acceptance kind `sealed`). */
+  seal?: SealEnvelope
+  /** Authenticated submitter to bind the envelope to, when known. */
+  expectedSubmitter?: SealSubmitter
 }
 
 const MAX_BODY = 1_000_000
@@ -71,6 +91,8 @@ export async function verifyWork(
       case 'command':
       case 'hash':
         return await verifyHash(input.acceptance, input, deps, now)
+      case 'sealed':
+        return await verifySealed(input.acceptance, input, deps, now)
       case 'llm-judge':
         return await verifyLlm(input.acceptance, input, deps, now)
       default:
@@ -355,8 +377,96 @@ async function verifyHash(
   }
 }
 
-function llmServiceFailureReason(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err)
+/**
+ * Sealed acceptance: offline envelope verification (chain + hash binding +
+ * optional submitter binding). Never fetches the artifact. When
+ * `requireTimestamp` is set and the envelope has no bound token, the
+ * platform stamp hook fills it in; TSA outages fail soft so work stays
+ * submitted instead of being marked failed.
+ */
+async function verifySealed(
+  spec: Extract<AcceptanceSpec, { kind: 'sealed' }>,
+  input: VerifyWorkInput,
+  deps: VerifyDeps,
+  now: string,
+): Promise<Verification> {
+  const kind = 'sealed' as const
+  if (!input.seal) {
+    return {
+      passed: false,
+      kind,
+      reason: 'seal_missing',
+      checkedAt: now,
+      details: {
+        hint: 'Attach a seal envelope from createSubmitSeal({ workHash, submitter }).',
+      },
+    }
+  }
+  const expected =
+    spec.expectedHash?.replace(/^0x/, '') ?? input.workHash?.replace(/^0x/, '')
+  const checked = verifySealEnvelope(input.seal, {
+    expectedWorkHash: expected,
+    expectedSubmitter: input.expectedSubmitter,
+    nowMs: deps.now?.().getTime(),
+  })
+  if (!checked.ok) {
+    return {
+      passed: false,
+      kind,
+      reason: checked.reason,
+      checkedAt: now,
+      details: { tip: checked.tip },
+    }
+  }
+  if (input.seal.rfc3161 || !spec.requireTimestamp) {
+    return {
+      passed: true,
+      kind,
+      reason: checked.reason,
+      checkedAt: now,
+      details: {
+        tip: checked.tip,
+        genTime: checked.genTime,
+        timestamped: Boolean(input.seal.rfc3161),
+      },
+    }
+  }
+  // Poster demands a trusted timestamp and the worker did not supply one:
+  // the platform stamps the hash itself (only the digest leaves).
+  const stampFn = deps.stamp ?? ((h: string) => requestRfc3161(h))
+  try {
+    const stamp = await stampFn(input.seal.workHash)
+    if (stamp.hashedMessage.toLowerCase() !== input.seal.workHash.toLowerCase()) {
+      return { passed: false, kind, reason: 'seal_stamp_hash_mismatch', checkedAt: now }
+    }
+    return {
+      passed: true,
+      kind,
+      reason: 'sealed_platform_timestamp',
+      checkedAt: now,
+      details: {
+        tip: checked.tip,
+        genTime: stamp.genTime,
+        stampedBy: 'platform',
+        tsa: stamp.tsa,
+        stamp,
+      },
+    }
+  } catch (e) {
+    return {
+      passed: false,
+      kind,
+      reason: 'timestamp_unavailable',
+      checkedAt: now,
+      details: {
+        softFailure: true,
+        error: e instanceof Error ? e.message : String(e),
+      },
+    }
+  }
+}
+
+function llmServiceFailureReason(err: unknown): string {  const msg = err instanceof Error ? err.message : String(err)
   if (/402|429|credit|quota|billing|insufficient|exhausted/i.test(msg)) {
     return 'llm_credits_exhausted'
   }
