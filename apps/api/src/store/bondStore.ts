@@ -129,6 +129,7 @@ export class BondStore {
     controllerKey: string,
     reason: string,
     role: BondRole = 'poster',
+    opts: { forfeitedTo?: string } = {},
   ): Promise<PosterBond | undefined> {
     const b = this.getActive(controllerKey, role)
     if (!b) return undefined
@@ -136,6 +137,7 @@ export class BondStore {
       ...b,
       status: 'slashed',
       slashReason: reason,
+      ...(opts.forfeitedTo ? { forfeitedTo: opts.forfeitedTo } : {}),
       updatedAt: new Date().toISOString(),
     }
     const idx = this.bonds.indexOf(b)

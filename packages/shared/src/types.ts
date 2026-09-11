@@ -82,6 +82,25 @@ export interface BountyEscrowMeta {
 /** How the poster covered the sat amount (v1 card path is off-chain USD). */
 export type BountyFundingMethod = 'bsv' | 'card' | 'agentpay'
 
+/**
+ * TinyBets prediction-market metadata (P2P prop bets as bounties).
+ * Maker stakes amountSats on YES; the taker matches it via worker bond on
+ * NO; the oracle URL resolves it. Taker wins -> paid. Maker wins ->
+ * refunded + taker bond slashed with forfeitedTo = maker (accounting;
+ * on-chain bond custody is a later phase).
+ */
+export interface TinyBetMarket {
+  kind: 'tinybets'
+  /** Taker side is always NO in P0 (maker stakes YES). */
+  takerSide: 'no'
+  /** Resolver endpoint; GET returns JSON consumed by the http acceptance. */
+  oracle: string
+  /** Unix seconds: no claims/submits accepted after this (anti-sniping). */
+  deadline: number
+  /** Slash the taker's bond to the maker on maker win (default true). */
+  forfeitBondToMaker: boolean
+}
+
 export type BountyFundingStatus = 'unfunded' | 'pending' | 'funded'
 
 export interface BountyFunding {
@@ -135,6 +154,12 @@ export interface Bounty {
   escrow?: BountyEscrowMeta
   /** Machine-checkable acceptance (default manual). */
   acceptance?: AcceptanceSpec
+  /**
+   * TinyBets prediction market metadata. When present, the bounty is a
+   * maker-vs-taker prop bet: maker stakes amountSats on YES, the taker
+   * matches it via worker bond on NO, and the oracle settles it.
+   */
+  market?: TinyBetMarket
   arbiterMode?: ArbiterMode
   milestones?: Milestone[]
   currentMilestone?: number

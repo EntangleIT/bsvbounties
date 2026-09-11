@@ -14,6 +14,8 @@ export interface PosterBond {
   depositTxid?: string
   releaseTxid?: string
   slashReason?: string
+  /** TinyBets: maker (poster) the forfeited stake is owed to. Accounting only. */
+  forfeitedTo?: string
   createdAt: string
   updatedAt: string
   network: Network

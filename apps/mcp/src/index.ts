@@ -97,6 +97,16 @@ server.tool(
       .string()
       .optional()
       .describe('JSON-encoded expected value for http jsonPath'),
+    market: z
+      .object({
+        kind: z.literal('tinybets'),
+        takerSide: z.literal('no'),
+        oracle: z.string().url(),
+        deadline: z.number().int().positive(),
+        forfeitBondToMaker: z.boolean().optional(),
+      })
+      .optional()
+      .describe('TinyBets market: maker stakes YES, taker matches NO via bond'),
   },
   async (args) => {
     const {
@@ -109,6 +119,7 @@ server.tool(
       jsonPath,
       expectJson,
       contentTypePrefix,
+      market,
       ...rest
     } = args
     let expect: unknown
@@ -137,6 +148,7 @@ server.tool(
           useEscrow: useEscrow ?? true,
           arbiter,
           acceptance,
+          market,
         }),
         token,
       }),

@@ -93,6 +93,16 @@ const milestoneSchema = z.object({
   acceptance: acceptanceSchema,
 })
 
+const marketSchema = z
+  .object({
+    kind: z.literal('tinybets'),
+    takerSide: z.literal('no'),
+    oracle: z.string().url().max(500),
+    deadline: z.number().int().positive(),
+    forfeitBondToMaker: z.boolean().default(true),
+  })
+  .strict()
+
 const createSchema = z.object({
   title: z.string().min(3).max(120),
   description: z.string().min(10).max(8000),
@@ -109,6 +119,8 @@ const createSchema = z.object({
   arbiter: z.union([z.literal('llm'), z.string()]).optional(),
   acceptance: acceptanceSchema.optional(),
   milestones: z.array(milestoneSchema).optional(),
+  /** TinyBets prediction market metadata (maker stakes YES, taker matches NO). */
+  market: marketSchema.optional(),
   /** Unix timestamp or block height; 0 = no timed refund. */
   deadline: z.number().int().nonnegative().optional(),
   feeBps: z.number().int().min(0).max(1000).optional(),
@@ -673,6 +685,7 @@ export function bountyRoutes(
       escrowTxid: body.escrowTxid,
       escrow,
       acceptance,
+      market: body.market,
       arbiterMode,
       milestones,
       currentMilestone: milestones?.length ? 0 : undefined,
@@ -1036,6 +1049,33 @@ export function bountyRoutes(
             403,
           )
         }
+      }
+    }
+
+    // TinyBets: taker matches the maker's stake via worker bond (NO side).
+    // Trust discount halves the required match, same as the bond gate above.
+    if (existing.market && bonds) {
+      const nowSec = Math.floor(Date.now() / 1000)
+      if (nowSec >= existing.market.deadline) {
+        return c.json(
+          { error: 'market_closed', note: 'Betting closed at the market deadline — no entries after.' },
+          409,
+        )
+      }
+      const required = trustDiscounted
+        ? Math.max(1, Math.ceil(existing.amountSats / 2))
+        : existing.amountSats
+      if (!bonds.meetsMinimum(workerPubKey, required, 'worker')) {
+        return c.json(
+          {
+            error: 'taker_bond_insufficient',
+            requiredStakeSats: required,
+            makerStakeSats: existing.amountSats,
+            bondDiscountBps,
+            note: `Match the maker's ${existing.amountSats} sats with a worker bond of at least ${required} sats via POST /v1/bonds/deposit with role=worker.`,
+          },
+          403,
+        )
       }
     }
 
@@ -1435,7 +1475,8 @@ export function bountyRoutes(
         body.outcome === 'refunded' &&
         existing.status !== 'open' &&
         bonds &&
-        existing.workerPubKey
+        existing.workerPubKey &&
+        !existing.market?.forfeitBondToMaker
       ) {
         await slashWorker(
           existing.workerPubKey,
@@ -1443,7 +1484,8 @@ export function bountyRoutes(
           'no_submit_by_deadline',
         )
       }
-      return c.json(action)
+      const market = await settleMarketBonds(existing, body.outcome)
+      return c.json(market ? { ...action, market } : action)
     }
 
     // Legacy / index-only bounties: poster session required to change board status.
@@ -1483,6 +1525,7 @@ export function bountyRoutes(
     ) {
       await accounts.bumpStat(existing.workerAccount, 'bountiesCompleted')
     }
+    const market = await settleMarketBonds(existing, body.outcome)
     await notifyAgentpay({
       bounty: updated ?? existing,
       outcome: body.outcome,
@@ -1491,6 +1534,7 @@ export function bountyRoutes(
     return c.json({
       bounty: updated,
       labels: [BRC100_LABELS.app, BRC100_LABELS.settle],
+      ...(market ? { market } : {}),
     })
   })
 
@@ -1516,6 +1560,35 @@ export function bountyRoutes(
     if (slashed && accountNumber != null && accounts) {
       await accounts.bumpStat(accountNumber, 'slashes')
     }
+  }
+
+  /**
+   * TinyBets settlement accounting (no chain movement — bonds are records
+   * until on-chain custody lands). Taker win: release the taker's bond.
+   * Maker win: slash it with forfeitedTo = maker. Returns a summary for the
+   * settle response, or null when this isn't a market bounty.
+   */
+  async function settleMarketBonds(
+    bounty: Bounty,
+    outcome: 'paid' | 'refunded',
+  ): Promise<null | { released?: boolean; forfeitedTo?: string; forfeitedSats?: number }> {
+    if (!bounty.market || !bonds || !bounty.workerPubKey) return null
+    if (outcome === 'paid') {
+      const released = await bonds.release(bounty.workerPubKey, undefined, 'worker')
+      return released ? { released: true } : null
+    }
+    if (bounty.market.forfeitBondToMaker && bounty.posterPubKey) {
+      const slashed = await bonds.slash(bounty.workerPubKey, 'tinybets_maker_win', 'worker', {
+        forfeitedTo: bounty.posterPubKey,
+      })
+      if (slashed) {
+        if (bounty.workerAccount != null && accounts) {
+          await accounts.bumpStat(bounty.workerAccount, 'slashes')
+        }
+        return { forfeitedTo: bounty.posterPubKey, forfeitedSats: slashed.amountSats }
+      }
+    }
+    return null
   }
 
   app.post('/:id/dispute', async (c) => {
