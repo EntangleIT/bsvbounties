@@ -12,7 +12,7 @@ import type { BountyStore } from './store/bountyStore.js'
 import type { AccountStore } from './store/accountStore.js'
 import type { BondStore } from './store/bondStore.js'
 import type { ChallengeStore, SessionStore } from './store/sessionStore.js'
-import { bountyRoutes } from './routes/bounties.js'
+import { bountyRoutes, type AgentpayNotifier } from './routes/bounties.js'
 import { accountRoutes } from './routes/accounts.js'
 import { authRoutes } from './routes/auth.js'
 import { bondRoutes } from './routes/bonds.js'
@@ -61,6 +61,11 @@ export type CreateAppConfig = {
   }
   /** Injected in tests; default is env STRIPE_SECRET_KEY. Pass `null` to force off. */
   stripe?: StripeAdapter | null
+  /**
+   * BSVBounties → agentpay settle bridge. When present, paid/refunded bounties
+   * post an event so agentpay can credit the wallet that claimed here.
+   */
+  agentpay?: AgentpayNotifier | null
 }
 
 function scryptArtifactSafe(): boolean {
@@ -194,6 +199,7 @@ export function createApp(config: CreateAppConfig): Hono {
         events: stripeEvents,
         returnBase: checkoutReturnBase(config),
       },
+      config.agentpay ?? null,
     ),
   )
   inner.route('/v1/accounts', accountRoutes(accounts, sessions, config.network))

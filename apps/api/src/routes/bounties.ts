@@ -63,6 +63,14 @@ export type BountyStripeContext = {
   returnBase: string
 }
 
+/** BSVBounties → agentpay settle bridge (service binding + shared secret). */
+export type AgentpayNotifier = {
+  fetcher: {
+    fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>
+  }
+  secret?: string
+}
+
 const acceptanceSchema = z
   .object({
     kind: z.enum([
@@ -257,9 +265,55 @@ export function bountyRoutes(
   bonds?: BondStore,
   llm?: LlmClient,
   stripe?: BountyStripeContext,
+  agentpay?: AgentpayNotifier | null,
 ) {
   const app = new Hono()
   const requireAccounts = process.env.REQUIRE_ACCOUNT_FOR_CLAIM === 'true'
+
+  /**
+   * Settle events let the agentpay bridge credit the wallet that claimed the
+   * bounty through its MCP. Fire-and-forget: failures never block settlement,
+   * and credits are idempotent on the agentpay side.
+   */
+  async function notifyAgentpay(event: {
+    bounty: Bounty
+    outcome: 'paid' | 'refunded'
+    settleTxid?: string
+  }) {
+    if (!agentpay) return
+    try {
+      const res = await agentpay.fetcher.fetch(
+        new Request(
+          'https://agentpay.internal/api/agentpay/internal/bounty-event',
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-agentpay-internal': agentpay.secret ?? '',
+            },
+            body: JSON.stringify({
+              bountyId: event.bounty.id,
+              outcome: event.outcome,
+              amountSats: event.bounty.amountSats,
+              workerPubKey: event.bounty.workerPubKey,
+              workerAccount: event.bounty.workerAccount,
+              settleTxid: event.settleTxid ?? event.bounty.settleTxid,
+              title: event.bounty.title,
+              category: event.bounty.category,
+            }),
+          },
+        ),
+      )
+      if (!res.ok) {
+        console.warn('[agentpay] bounty event rejected', res.status)
+      }
+    } catch (err) {
+      console.warn(
+        '[agentpay] bounty event failed',
+        err instanceof Error ? err.message : err,
+      )
+    }
+  }
 
   app.get('/', (c) => {
     const status = c.req.query('status') as Bounty['status'] | undefined
@@ -762,6 +816,13 @@ export function bountyRoutes(
     }
 
     const updated = await store.update(existing.id, patch)
+    if (nextStatus === 'paid' || nextStatus === 'refunded') {
+      await notifyAgentpay({
+        bounty: updated ?? existing,
+        outcome: nextStatus,
+        settleTxid: body.txid,
+      })
+    }
     return {
       bounty: updated,
       transition: result,
@@ -1123,6 +1184,7 @@ export function bountyRoutes(
     if (bounty.workerAccount != null && accounts) {
       await accounts.bumpStat(bounty.workerAccount, 'bountiesCompleted')
     }
+    await notifyAgentpay({ bounty: { ...bounty, status: 'paid' }, outcome: 'paid' })
     return { autoReleased: true, approveAction: null }
   }
 
@@ -1246,6 +1308,11 @@ export function bountyRoutes(
     ) {
       await accounts.bumpStat(existing.workerAccount, 'bountiesCompleted')
     }
+    await notifyAgentpay({
+      bounty: updated ?? existing,
+      outcome: body.outcome,
+      settleTxid: body.settleTxid,
+    })
     return c.json({
       bounty: updated,
       labels: [BRC100_LABELS.app, BRC100_LABELS.settle],

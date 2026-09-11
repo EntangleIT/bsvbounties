@@ -99,6 +99,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     stores.stripeEvents.init(),
   ])
   const publicUrl = env.PUBLIC_URL || `https://entangleit.com${PREFIX}`
+  const agentpaySecret = (env as unknown as Record<string, unknown>)
+    .AGENTPAY_WEBHOOK_SECRET
   const app = createApp({
     publicUrl,
     webOrigins: [
@@ -112,6 +114,12 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     stores,
     basePath: PREFIX,
     twetch: { pending: twetchPending },
+    agentpay: env.AGENTPAY
+      ? {
+          fetcher: env.AGENTPAY,
+          secret: typeof agentpaySecret === 'string' ? agentpaySecret : undefined,
+        }
+      : null,
   })
   return app.fetch(request)
 }

@@ -34,6 +34,16 @@
       "binding": "AI_BOUNTIES"
     }
   ],
+  // Earn-side bridge: paid/refunded bounties post an event so agentpay can
+  // credit the wallet that claimed them via the agentpay MCP.
+  // Secret: `npx wrangler secret put AGENTPAY_WEBHOOK_SECRET` (same value as
+  // agentpay's BOUNTIES_WEBHOOK_SECRET).
+  "services": [
+    {
+      "binding": "AGENTPAY",
+      "service": "agentpay-api"
+    }
+  ],
   "assets": {
     "directory": "./apps/web/dist",
     "binding": "ASSETS",
