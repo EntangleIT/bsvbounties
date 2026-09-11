@@ -129,7 +129,10 @@ export class AccountStore {
     if (this.d1) {
       try {
         const rows = (await readAccountsD1(this.d1, limit)).map(normalizeAccount)
-        if (rows.length > 0 || (await countAccountsD1(this.d1)) === 0) {
+        // D1 wins only with data, or when both stores are empty. A fresh,
+        // not-yet-backfilled D1 must NOT shadow the KV snapshot.
+        if (rows.length > 0) return { rows, source: 'd1' }
+        if ((await countAccountsD1(this.d1)) === 0 && this.accounts.length === 0) {
           return { rows, source: 'd1' }
         }
       } catch {
