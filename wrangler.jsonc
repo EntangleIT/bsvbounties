@@ -38,6 +38,14 @@
       "binding": "AI_BOUNTIES"
     }
   ],
+  // Phase C: uncomment after `wrangler d1 create bsvbounties` + schema.sql apply.
+  // "d1_databases": [
+  //   {
+  //     "binding": "BSVB_D1",
+  //     "database_name": "bsvbounties",
+  //     "database_id": "REPLACE-WITH-PROVISIONED-ID"
+  //   }
+  // ],
   // Earn-side bridge: paid/refunded bounties post an event so agentpay can
   // credit the wallet that claimed them via the agentpay MCP.
   // Secret: `npx wrangler secret put AGENTPAY_WEBHOOK_SECRET` (same value as

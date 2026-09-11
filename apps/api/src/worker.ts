@@ -47,6 +47,7 @@ const ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'AGENTPAY_WEBHOOK_SECRET',
   'TRUST_GATE_CLAIM',
+  'TRUST_FULL_WAIVE',
   'AGENTPAY_PUBLIC_URL',
 ] as const
 
@@ -101,6 +102,11 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     twetchPending.init(),
     stores.stripeEvents.init(),
   ])
+  // Phase C: attach the bsvbounties D1 mirror when provisioned (binding
+  // BSVB_D1). Absent binding => KV remains the only store, no behavior change.
+  stores.accounts.attachD1(
+    (env as unknown as Record<string, unknown>).BSVB_D1 as never,
+  )
   const publicUrl = env.PUBLIC_URL || `https://entangleit.com${PREFIX}`
   const agentpaySecret = (env as unknown as Record<string, unknown>)
     .AGENTPAY_WEBHOOK_SECRET

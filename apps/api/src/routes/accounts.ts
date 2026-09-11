@@ -64,11 +64,15 @@ export function accountRoutes(
    * score. No LLM involved — this is the cheap ground truth that
    * POST /v1/llm/rank-workers refines with skills matching.
    */
-  app.get('/leaderboard', (c) => {
+  app.get('/leaderboard', async (c) => {
     const kind = c.req.query('kind') as AccountKind | undefined
     const limit = Math.min(Number(c.req.query('limit') ?? 20), 100)
-    const items = accounts
-      .list({ kind, limit: 1000 })
+    const { rows, source } = await accounts.leaderboardRows(1000).catch(() => ({
+      rows: accounts.list({ kind, limit: 1000 }),
+      source: 'kv' as const,
+    }))
+    const items = rows
+      .filter((a) => (kind ? a.kind === kind : true))
       .map((a) => ({ ...a, reputation: reputationOf(a) }))
       .sort(
         (x, y) =>
@@ -79,6 +83,7 @@ export function accountRoutes(
       items,
       total: items.length,
       scoredAt: new Date().toISOString(),
+      source,
     })
   })
 
