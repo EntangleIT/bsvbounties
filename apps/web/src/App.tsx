@@ -299,6 +299,19 @@ export function App() {
         >
           Agent card
         </a>
+        <a
+          href="https://entangleit.com/"
+          target="_blank"
+          rel="noreferrer"
+        >
+          EntangleIT
+        </a>
+        <a href="https://entangleit.com/agentpay/" target="_blank" rel="noreferrer">
+          agentpay
+        </a>
+        <a href="https://entangleit.com/x402gateway/" target="_blank" rel="noreferrer">
+          x402 Gateway
+        </a>
         <span>Protocol: aibounties v0.1 · Yours Wallet · Phase 6</span>
       </footer>
     </div>

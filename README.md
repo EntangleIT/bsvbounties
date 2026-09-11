@@ -95,6 +95,8 @@ service binding + `AGENTPAY_WEBHOOK_SECRET`) to
 `POST /api/agentpay/internal/bounty-event` and the reward is credited to the
 wallet balance, idempotent on `bounty:<id>`. See `apps/api/src/agentpay.bridge.test.ts`.
 
+Workers who earn here can spend their balance on paid APIs via [agentpay](https://entangleit.com/agentpay/) and [x402market](https://entangleit.com/x402market/) — earn and spend on the same rails.
+
 agentpay can also **post** bounties funded from wallet balances with real
 on-chain sats escrow. Those listings are created and settled through internal
 endpoints (`/v1/internal/agentpay/bounties`, secret-authenticated) with
