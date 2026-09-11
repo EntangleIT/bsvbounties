@@ -2,21 +2,27 @@
  * Two-way trust gating — read-only, no escrow writes.
  *
  * Direction A (spend -> work): BSVBounties claim verifies an agentpay
- * attestation and may waive the worker bond fully (CEO decision #2).
+ * attestation and discounts the worker bond 50% until wallet↔account
+ * binding lands (CEO: breaking changes fine, 50% until bound).
  * Direction B (work -> spend): agentpay pay_service reads reputation and
- * fast-paths the approval threshold x2 (CEO decision #1).
+ * fast-paths the approval threshold x2.
  *
- * Thresholds (CEO approved):
- *  N payments >= 10, M distinctServices >= 3, refunds == 0,
- *  reputation score >= 650, non-provisional, slashes == 0.
- * Rollout: TRUST_GATE_* = off | log | enforce, default log for 3 days (#3).
+ * Thresholds: N payments >= 10, M distinctServices >= 3 (and distinctPayTo
+ * >= 3 when present), spentCents >= 50, wallet age >= 7d, refunds == 0;
+ * reputation score >= 650, non-provisional, slashes == 0.
+ * Rollout: TRUST_GATE_* = off | log | enforce, default log.
  */
 
 export const TRUST_ATTEST_MIN_PAYMENTS = 10;
 export const TRUST_ATTEST_MIN_SERVICES = 3;
+export const TRUST_ATTEST_MIN_SPENT_CENTS = 50;
+export const TRUST_ATTEST_MIN_WALLET_AGE_MS = 7 * 86_400_000;
 export const TRUST_REPUTATION_MIN_SCORE = 650;
 export const TRUST_APPROVAL_MULTIPLIER = 2;
 export const TRUST_ATTEST_MAX_AGE_MS = 24 * 3_600_000;
+/** 50% bond discount until wallet↔account binding ships, then 10000. */
+export const TRUST_BOND_DISCOUNT_BPS_UNBOUND = 5000;
+export const TRUST_BOND_DISCOUNT_BPS_BOUND = 10000;
 
 export type TrustGateMode = 'off' | 'log' | 'enforce';
 
@@ -29,6 +35,8 @@ export function trustGateModeFromEnv(value: unknown): TrustGateMode {
 export interface AttestationMetricsLite {
   settledPayments: number;
   distinctServices: number;
+  /** Distinct on-chain payees when the issuer tracks it (anti-wash). */
+  distinctPayTo?: number;
   spentCents: number;
   refundedCents: number;
   bountyPayouts?: number;
@@ -41,6 +49,8 @@ export interface AttestationLite {
   v: number;
   iss: string;
   wallet?: string;
+  /** Optional claimant binding (workerPubKey/account) — verified in A2. */
+  sub?: string;
   windowDays?: number;
   issuedAt: string;
   expiresAt: string;
@@ -77,8 +87,24 @@ export function trustGateForClaim(
   }
   if (m.settledPayments < TRUST_ATTEST_MIN_PAYMENTS) return { eligible: false, reason: 'too_few_payments', metrics: m };
   if (m.distinctServices < TRUST_ATTEST_MIN_SERVICES) return { eligible: false, reason: 'too_few_services', metrics: m };
+  if (typeof m.distinctPayTo === 'number' && m.distinctPayTo < TRUST_ATTEST_MIN_SERVICES) {
+    return { eligible: false, reason: 'too_few_payees', metrics: m };
+  }
+  if ((m.spentCents ?? 0) < TRUST_ATTEST_MIN_SPENT_CENTS) return { eligible: false, reason: 'spend_too_low', metrics: m };
+  if (typeof m.firstPaymentAt === 'string' && m.firstPaymentAt) {
+    const first = Date.parse(m.firstPaymentAt);
+    if (Number.isFinite(first) && nowMs - first < TRUST_ATTEST_MIN_WALLET_AGE_MS) {
+      return { eligible: false, reason: 'wallet_too_new', metrics: m };
+    }
+  }
   if ((m.refundedCents ?? 0) > 0) return { eligible: false, reason: 'has_refunds', metrics: m };
   return { eligible: true, reason: 'trusted_spender', metrics: m };
+}
+
+/** Bond discount in bps: 50% until wallet↔account binding ships, then full. */
+export function trustBondDiscountBps(eligible: boolean, bound: boolean): number {
+  if (!eligible) return 0;
+  return bound ? TRUST_BOND_DISCOUNT_BPS_BOUND : TRUST_BOND_DISCOUNT_BPS_UNBOUND;
 }
 
 export interface ReputationLite {

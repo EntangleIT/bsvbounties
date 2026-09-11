@@ -55,6 +55,7 @@ import {
 import { bsvUsdFromEnv, quoteCardCharge, usdFeePercent } from '../stripe/quote.js'
 import { getSessionFromRequest } from './auth.js'
 import { bondGate, workerBondGate } from './bonds.js'
+import { trustBondDiscountBps } from '@ai-bounties/shared'
 import { evaluateClaimTrust } from '../trust.js'
 import { runBountyVerifier, runLlmArbiter } from '../verifyFlow.js'
 
@@ -969,17 +970,26 @@ export function bountyRoutes(
       return c.json({ error: 'worker_identity_required' }, 400)
     }
 
-    // Two-way trust (spend -> work): verified agentpay attestation may waive
-    // the worker bond fully. Default mode is log-only for 3 days: evaluate
-    // and report, do not waive until TRUST_GATE_CLAIM=enforce.
+    // Two-way trust (spend -> work): sub-bound agentpay attestation earns a
+    // 50% worker-bond discount until wallet↔account binding proves out, then
+    // full waive (TRUST_FULL_WAIVE=true). Default log-only: evaluate + report.
     const trust = await evaluateClaimTrust({
       attestation: (body as Record<string, unknown>).attestation,
       signature: (body as Record<string, unknown>).attestationSignature,
       keyId: (body as Record<string, unknown>).attestationKeyId,
-    }).catch(() => ({ eligible: false as const, reason: 'verify_error', verified: false, mode: 'log' as const }))
-    const trustWaived = trust.mode === 'enforce' && trust.eligible && trust.verified
+      expectedSub: workerPubKey,
+    }).catch(() => ({
+      eligible: false as const,
+      reason: 'verify_error',
+      verified: false,
+      subMatch: false as const,
+      mode: 'log' as const,
+    }))
+    const fullWaive = process.env.TRUST_FULL_WAIVE === 'true'
+    const bondDiscountBps = trust.mode === 'enforce' ? trustBondDiscountBps(trust.eligible && trust.subMatch, fullWaive) : 0
+    const trustDiscounted = bondDiscountBps > 0
 
-    if (bonds && !trustWaived) {
+    if (bonds && !trustDiscounted) {
       const gate = workerBondGate(bonds, workerPubKey)
       if (!gate.ok) {
         return c.json(
@@ -987,10 +997,45 @@ export function bountyRoutes(
             error: gate.error,
             minBondSats: gate.minBondSats,
             note: `Deposit a worker bond of at least ${gate.minBondSats} sats via POST /v1/bonds/deposit with role=worker.`,
-            trust: { eligible: trust.eligible, reason: trust.reason, verified: trust.verified, mode: trust.mode },
+            trust: {
+              eligible: trust.eligible,
+              reason: trust.reason,
+              verified: trust.verified,
+              subMatch: trust.subMatch,
+              mode: trust.mode,
+              bondDiscountBps: 0,
+            },
           },
           403,
         )
+      }
+    }
+
+    if (bonds && trustDiscounted) {
+      // 50% path: full gate failed-or-skipped; require half the minimum.
+      const gate = workerBondGate(bonds, workerPubKey)
+      if (!gate.ok) {
+        const halfMin = Math.max(1, Math.ceil(gate.minBondSats / 2))
+        if (!bonds.meetsMinimum(workerPubKey, halfMin, 'worker')) {
+          return c.json(
+            {
+              error: gate.error,
+              minBondSats: gate.minBondSats,
+              discountedMinBondSats: halfMin,
+              bondDiscountBps,
+              note: `Trusted spender: deposit at least ${halfMin} sats (50% off ${gate.minBondSats}) via POST /v1/bonds/deposit with role=worker.`,
+              trust: {
+                eligible: trust.eligible,
+                reason: trust.reason,
+                verified: trust.verified,
+                subMatch: trust.subMatch,
+                mode: trust.mode,
+                bondDiscountBps,
+              },
+            },
+            403,
+          )
+        }
       }
     }
 
@@ -1019,8 +1064,9 @@ export function bountyRoutes(
           eligible: trust.eligible,
           reason: trust.reason,
           verified: trust.verified,
+          subMatch: trust.subMatch,
           mode: trust.mode,
-          bondWaived: trustWaived,
+          bondDiscountBps,
         },
       })
     }
@@ -1045,8 +1091,9 @@ export function bountyRoutes(
         eligible: trust.eligible,
         reason: trust.reason,
         verified: trust.verified,
+        subMatch: trust.subMatch,
         mode: trust.mode,
-        bondWaived: trustWaived,
+        bondDiscountBps,
       },
     })
   })

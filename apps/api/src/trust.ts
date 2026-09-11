@@ -85,26 +85,37 @@ export interface ClaimTrustInput {
   attestation?: unknown
   signature?: unknown
   keyId?: unknown
+  /** Claimant identity the attestation must be bound to (workerPubKey). */
+  expectedSub?: string
 }
 
 export async function evaluateClaimTrust(input: ClaimTrustInput): Promise<{
   eligible: boolean
   reason: string
   verified: boolean
+  subMatch: boolean
   mode: TrustClaimMode
 }> {
   const mode = trustClaimMode()
-  if (mode === 'off') return { eligible: false, reason: 'disabled', verified: false, mode }
-  const { attestation, signature, keyId } = input
+  if (mode === 'off') return { eligible: false, reason: 'disabled', verified: false, subMatch: false, mode }
+  const { attestation, signature, keyId, expectedSub } = input
   if (!attestation || typeof signature !== 'string') {
-    return { eligible: false, reason: 'no_attestation', verified: false, mode }
+    return { eligible: false, reason: 'no_attestation', verified: false, subMatch: false, mode }
   }
   const { valid } = await verifyAgentpayAttestation(
     attestation as AttestationLite,
     signature,
     typeof keyId === 'string' ? keyId : undefined,
   )
-  if (!valid) return { eligible: false, reason: 'bad_signature', verified: false, mode }
+  if (!valid) return { eligible: false, reason: 'bad_signature', verified: false, subMatch: false, mode }
+  // Binding: attestation.sub must equal the claimant. Unbound legacy
+  // attestations (no sub) fail closed when a claimant is known.
+  const sub = (attestation as AttestationLite).sub
+  if (typeof expectedSub === 'string' && expectedSub.length > 0) {
+    if (typeof sub !== 'string' || sub !== expectedSub) {
+      return { eligible: false, reason: 'sub_mismatch', verified: true, subMatch: false, mode }
+    }
+  }
   const gate = trustGateForClaim(attestation as AttestationLite)
-  return { eligible: gate.eligible, reason: gate.reason, verified: true, mode }
+  return { eligible: gate.eligible, reason: gate.reason, verified: true, subMatch: true, mode }
 }

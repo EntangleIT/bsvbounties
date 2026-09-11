@@ -7,7 +7,7 @@ import type {
 } from '@ai-bounties/shared'
 import { EMPTY_ACCOUNT_STATS, normalizeAccount } from '@ai-bounties/shared'
 import { persistFrom, type JsonPersist } from './persist.js'
-
+import { countAccountsD1, mirrorAccount, readAccountsD1, type D1Like } from './d1.js'
 interface StoreFile {
   nextNumber: number
   accounts: Account[]
@@ -17,9 +17,27 @@ export class AccountStore {
   private backend: JsonPersist
   private nextNumber = 1
   private accounts: Account[] = []
+  /** Optional D1 write-mirror (Phase C). Null until provisioned. */
+  private d1: D1Like | null = null
 
   constructor(dataDirOrPersist: string | JsonPersist) {
     this.backend = persistFrom(dataDirOrPersist, 'accounts.json')
+  }
+
+  /** Attach the bsvbounties D1 for mirroring. Safe to call with undefined. */
+  attachD1(db: D1Like | null | undefined): void {
+    this.d1 = db ?? null
+  }
+
+  get d1Attached(): boolean {
+    return this.d1 !== null
+  }
+
+  private mirror(account: Account): Promise<void> {
+    if (!this.d1) return Promise.resolve()
+    return mirrorAccount(this.d1, account).catch(() => {
+      /* mirror is best-effort — KV remains source of truth */
+    })
   }
 
   async init(): Promise<void> {
@@ -101,6 +119,26 @@ export class AccountStore {
     return rows.slice(offset, offset + limit)
   }
 
+  /**
+   * Leaderboard source rows, D1-preferred with KV fallback.
+   * Returns normalized accounts (unranked); callers apply reputationOf + sort.
+   * Throws only when neither source yields rows AND d1 is attached — callers
+   * fall back to list() on any error.
+   */
+  async leaderboardRows(limit = 1000): Promise<{ rows: Account[]; source: 'd1' | 'kv' }> {
+    if (this.d1) {
+      try {
+        const rows = (await readAccountsD1(this.d1, limit)).map(normalizeAccount)
+        if (rows.length > 0 || (await countAccountsD1(this.d1)) === 0) {
+          return { rows, source: 'd1' }
+        }
+      } catch {
+        /* fall through to KV snapshot */
+      }
+    }
+    return { rows: this.list({ limit }), source: 'kv' }
+  }
+
   async mint(opts: {
     controllerKey: string
     displayName: string
@@ -147,6 +185,7 @@ export class AccountStore {
     }
     this.accounts.push(account)
     await this.persist()
+    await this.mirror(account)
     return account
   }
 
@@ -164,6 +203,7 @@ export class AccountStore {
     }
     this.accounts[idx] = next
     await this.persist()
+    await this.mirror(next)
     return next
   }
 
