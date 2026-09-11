@@ -55,6 +55,7 @@ import {
 import { bsvUsdFromEnv, quoteCardCharge, usdFeePercent } from '../stripe/quote.js'
 import { getSessionFromRequest } from './auth.js'
 import { bondGate, workerBondGate } from './bonds.js'
+import { evaluateClaimTrust } from '../trust.js'
 import { runBountyVerifier, runLlmArbiter } from '../verifyFlow.js'
 
 export type BountyStripeContext = {
@@ -120,6 +121,9 @@ const claimSchema = z.object({
   workerAccount: z.number().int().positive().optional(),
   claimTxid: z.string().optional(),
   workerLockingScriptHex: z.string().optional(),
+  attestation: z.unknown().optional(),
+  attestationSignature: z.string().optional(),
+  attestationKeyId: z.string().optional(),
 })
 
 /** Trust B: sealed-submission envelope. Deep validation happens in verifySealed (fail closed). */
@@ -965,7 +969,17 @@ export function bountyRoutes(
       return c.json({ error: 'worker_identity_required' }, 400)
     }
 
-    if (bonds) {
+    // Two-way trust (spend -> work): verified agentpay attestation may waive
+    // the worker bond fully. Default mode is log-only for 3 days: evaluate
+    // and report, do not waive until TRUST_GATE_CLAIM=enforce.
+    const trust = await evaluateClaimTrust({
+      attestation: (body as Record<string, unknown>).attestation,
+      signature: (body as Record<string, unknown>).attestationSignature,
+      keyId: (body as Record<string, unknown>).attestationKeyId,
+    }).catch(() => ({ eligible: false as const, reason: 'verify_error', verified: false, mode: 'log' as const }))
+    const trustWaived = trust.mode === 'enforce' && trust.eligible && trust.verified
+
+    if (bonds && !trustWaived) {
       const gate = workerBondGate(bonds, workerPubKey)
       if (!gate.ok) {
         return c.json(
@@ -973,6 +987,7 @@ export function bountyRoutes(
             error: gate.error,
             minBondSats: gate.minBondSats,
             note: `Deposit a worker bond of at least ${gate.minBondSats} sats via POST /v1/bonds/deposit with role=worker.`,
+            trust: { eligible: trust.eligible, reason: trust.reason, verified: trust.verified, mode: trust.mode },
           },
           403,
         )
@@ -998,7 +1013,16 @@ export function bountyRoutes(
       if (workerAccount != null && accounts) {
         await accounts.bumpStat(workerAccount, 'bountiesClaimed')
       }
-      return c.json(action)
+      return c.json({
+        ...action,
+        trust: {
+          eligible: trust.eligible,
+          reason: trust.reason,
+          verified: trust.verified,
+          mode: trust.mode,
+          bondWaived: trustWaived,
+        },
+      })
     }
 
     // Legacy Phase 1/2 claim
@@ -1017,6 +1041,13 @@ export function bountyRoutes(
     return c.json({
       bounty: updated,
       labels: [BRC100_LABELS.app, BRC100_LABELS.claim],
+      trust: {
+        eligible: trust.eligible,
+        reason: trust.reason,
+        verified: trust.verified,
+        mode: trust.mode,
+        bondWaived: trustWaived,
+      },
     })
   })
 

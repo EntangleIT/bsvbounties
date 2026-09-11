@@ -146,17 +146,20 @@ server.tool(
 
 server.tool(
   'claim_bounty',
-  'Claim an open bounty as worker',
+  'Claim an open bounty as worker (pass agentpay attestation to waive worker bond when eligible)',
   {
     id: z.string(),
     workerPubKey: z.string().optional(),
     token: z.string().optional(),
+    attestation: z.unknown().optional().describe('agentpay attestation object from get_attestation'),
+    attestationSignature: z.string().optional().describe('base64url signature for the attestation'),
+    attestationKeyId: z.string().optional(),
   },
-  async ({ id, workerPubKey, token }) =>
+  async ({ id, workerPubKey, token, attestation, attestationSignature, attestationKeyId }) =>
     text(
       await api(`/v1/bounties/${id}/claim`, {
         method: 'POST',
-        body: JSON.stringify({ workerPubKey }),
+        body: JSON.stringify({ workerPubKey, attestation, attestationSignature, attestationKeyId }),
         token,
       }),
     ),

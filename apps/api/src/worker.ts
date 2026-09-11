@@ -46,6 +46,8 @@ const ENV_KEYS = [
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
   'AGENTPAY_WEBHOOK_SECRET',
+  'TRUST_GATE_CLAIM',
+  'AGENTPAY_PUBLIC_URL',
 ] as const
 
 function applyEnv(env: Env) {

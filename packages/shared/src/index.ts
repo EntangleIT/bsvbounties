@@ -9,4 +9,5 @@ export * from './bonds.js'
 export * from './acceptance.js'
 export * from './verify.js'
 export * from './bsm.js'
+export * from './trust.js'
 

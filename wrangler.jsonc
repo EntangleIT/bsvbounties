@@ -27,7 +27,11 @@
     // USD per 1 BSV for card Checkout quotes. Update when the market moves.
     "BSV_USD": "25",
     // 2.90% USD gross-up on card charges (plus $0.30). Sat payout fee is PLATFORM_FEE_BPS.
-    "USD_FEE_BPS": "290"
+    "USD_FEE_BPS": "290",
+    // Two-way trust (spend -> work): off | log | enforce. Default log for
+    // 3-day observation per CEO #3; enforce waives worker bond fully.
+    "TRUST_GATE_CLAIM": "log",
+    "AGENTPAY_PUBLIC_URL": "https://entangleit.com/api/agentpay"
   },
   "kv_namespaces": [
     {
