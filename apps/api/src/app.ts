@@ -13,6 +13,7 @@ import type { AccountStore } from './store/accountStore.js'
 import type { BondStore } from './store/bondStore.js'
 import type { ChallengeStore, SessionStore } from './store/sessionStore.js'
 import { bountyRoutes, type AgentpayNotifier } from './routes/bounties.js'
+import { agentpayInternalRoutes } from './routes/agentpayInternal.js'
 import { accountRoutes } from './routes/accounts.js'
 import { authRoutes } from './routes/auth.js'
 import { bondRoutes } from './routes/bonds.js'
@@ -201,6 +202,10 @@ export function createApp(config: CreateAppConfig): Hono {
       },
       config.agentpay ?? null,
     ),
+  )
+  inner.route(
+    '/v1/internal/agentpay',
+    agentpayInternalRoutes(bounties, config.agentpay ?? null),
   )
   inner.route('/v1/accounts', accountRoutes(accounts, sessions, config.network))
   inner.route('/v1/auth', authRoutes(accounts, sessions, challenges))

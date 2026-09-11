@@ -80,7 +80,7 @@ export interface BountyEscrowMeta {
 }
 
 /** How the poster covered the sat amount (v1 card path is off-chain USD). */
-export type BountyFundingMethod = 'bsv' | 'card'
+export type BountyFundingMethod = 'bsv' | 'card' | 'agentpay'
 
 export type BountyFundingStatus = 'unfunded' | 'pending' | 'funded'
 

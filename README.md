@@ -95,6 +95,13 @@ service binding + `AGENTPAY_WEBHOOK_SECRET`) to
 `POST /api/agentpay/internal/bounty-event` and the reward is credited to the
 wallet balance, idempotent on `bounty:<id>`. See `apps/api/src/agentpay.bridge.test.ts`.
 
+agentpay can also **post** bounties funded from wallet balances with real
+on-chain sats escrow. Those listings are created and settled through internal
+endpoints (`/v1/internal/agentpay/bounties`, secret-authenticated) with
+`funding.method = 'agentpay'`; settle events carry the funding rail so agentpay
+executes the payout/refund transaction and reports the txid back via
+`PATCH …/txid`. See `apps/api/src/agentpay.funded.test.ts`.
+
 ## Monorepo layout
 
 ```

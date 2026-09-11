@@ -257,6 +257,123 @@ function metaFromSnapshot(
   }
 }
 
+/** POST a settle event to agentpay (service binding + shared secret). */
+export async function postAgentpayEvent(
+  agentpay: AgentpayNotifier,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const res = await agentpay.fetcher.fetch(
+      new Request('https://agentpay.internal/api/agentpay/internal/bounty-event', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-agentpay-internal': agentpay.secret ?? '',
+        },
+        body: JSON.stringify(payload),
+      }),
+    )
+    if (!res.ok) {
+      console.warn('[agentpay] bounty event rejected', res.status)
+    }
+  } catch (err) {
+    console.warn(
+      '[agentpay] bounty event failed',
+      err instanceof Error ? err.message : err,
+    )
+  }
+}
+
+export interface AgentpayBountyInput {
+  title: string
+  description: string
+  category?: string
+  amountSats: number
+  deadline?: number
+  escrowTxid: string
+  posterRef: string
+  feeBps?: number
+}
+
+/**
+ * Creates an agentpay-funded bounty: platform-poster identity, on-chain escrow
+ * already broadcast, fee schedule recorded for the payout event.
+ */
+export async function createAgentpayBounty(
+  store: BountyStore,
+  input: AgentpayBountyInput,
+): Promise<Bounty> {
+  const amountSats = Math.floor(Number(input.amountSats))
+  if (!Number.isInteger(amountSats) || amountSats <= 0) {
+    throw new Error('amountSats must be a positive integer')
+  }
+  const title = String(input.title ?? '').trim().slice(0, 120)
+  const description = String(input.description ?? '').trim().slice(0, 2000)
+  if (!title || !description) throw new Error('title and description are required')
+  if (!input.escrowTxid || input.escrowTxid.length < 8) {
+    throw new Error('escrowTxid is required')
+  }
+  const category = (input.category ?? 'other').toLowerCase()
+  const id = generateBountyId()
+  const now = new Date().toISOString()
+  const acceptance = parseAcceptance(defaultAcceptance())
+  const hash = contentHash({ version: 1, title, description, category, requirements: [], acceptance })
+  const bounty: Bounty = {
+    id,
+    title,
+    description,
+    category,
+    requirements: [],
+    amountSats,
+    contentHash: hash,
+    status: 'open',
+    posterPubKey: input.posterRef,
+    escrowTxid: input.escrowTxid,
+    escrow: {
+      mode: 'p2pkh',
+      state: 0,
+      posterPubKey: input.posterRef,
+      workerPubKey: '',
+      arbiterPubKey: '',
+      deadline: input.deadline ?? 0,
+      feeBps: input.feeBps ?? defaultFeeBps(),
+      feePkh: defaultFeePkh(),
+      outpoint: `${input.escrowTxid}:0`,
+      lastTxid: input.escrowTxid,
+    },
+    funding: { method: 'agentpay', status: 'funded', amountSats, fundedAt: now },
+    acceptance,
+    releasedSats: 0,
+    createdAt: now,
+    updatedAt: now,
+    network: (process.env.NETWORK || 'test') as Network,
+  }
+  await store.create(bounty)
+  return bounty
+}
+
+/** Internal settlement for agentpay-funded bounties (no poster session). */
+export async function settleAgentpayBounty(
+  store: BountyStore,
+  id: string,
+  outcome: 'paid' | 'refunded',
+  txid?: string,
+): Promise<{ bounty?: Bounty; error?: string; status?: number }> {
+  const existing = store.get(id)
+  if (!existing) return { error: 'not_found', status: 404 }
+  if (existing.funding?.method !== 'agentpay') {
+    return { error: 'not_agentpay_funded', status: 400 }
+  }
+  if (!['open', 'claimed', 'submitted'].includes(existing.status)) {
+    return { error: 'invalid_status', status: 409 }
+  }
+  const updated = await store.update(id, {
+    status: outcome === 'paid' ? 'paid' : 'refunded',
+    settleTxid: txid,
+  })
+  return { bounty: updated ?? existing }
+}
+
 export function bountyRoutes(
   store: BountyStore,
   defaultNetwork: Network,
@@ -281,38 +398,18 @@ export function bountyRoutes(
     settleTxid?: string
   }) {
     if (!agentpay) return
-    try {
-      const res = await agentpay.fetcher.fetch(
-        new Request(
-          'https://agentpay.internal/api/agentpay/internal/bounty-event',
-          {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              'x-agentpay-internal': agentpay.secret ?? '',
-            },
-            body: JSON.stringify({
-              bountyId: event.bounty.id,
-              outcome: event.outcome,
-              amountSats: event.bounty.amountSats,
-              workerPubKey: event.bounty.workerPubKey,
-              workerAccount: event.bounty.workerAccount,
-              settleTxid: event.settleTxid ?? event.bounty.settleTxid,
-              title: event.bounty.title,
-              category: event.bounty.category,
-            }),
-          },
-        ),
-      )
-      if (!res.ok) {
-        console.warn('[agentpay] bounty event rejected', res.status)
-      }
-    } catch (err) {
-      console.warn(
-        '[agentpay] bounty event failed',
-        err instanceof Error ? err.message : err,
-      )
-    }
+    await postAgentpayEvent(agentpay, {
+      bountyId: event.bounty.id,
+      outcome: event.outcome,
+      amountSats: event.bounty.amountSats,
+      workerPubKey: event.bounty.workerPubKey,
+      workerAccount: event.bounty.workerAccount,
+      settleTxid: event.settleTxid ?? event.bounty.settleTxid,
+      title: event.bounty.title,
+      category: event.bounty.category,
+      funding: event.bounty.funding?.method ?? null,
+      posterRef: event.bounty.posterPubKey ?? null,
+    })
   }
 
   app.get('/', (c) => {

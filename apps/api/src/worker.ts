@@ -45,6 +45,7 @@ const ENV_KEYS = [
   'XAI_API_KEY',
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
+  'AGENTPAY_WEBHOOK_SECRET',
 ] as const
 
 function applyEnv(env: Env) {
